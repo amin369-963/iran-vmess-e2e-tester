@@ -1,0 +1,132 @@
+name: Global network report
+description: Share a reproducible, privacy-safe result from any country or provider
+title: "[Network report] Country / provider / access type"
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for contributing measurement evidence.
+
+        **Do not post live VMess links, UUIDs, access tokens, private subscription URLs, phone numbers, subscriber identifiers, precise addresses, or unredacted output reports.**
+
+        One report should describe one provider, one access type, and one test window.
+
+  - type: input
+    id: country
+    attributes:
+      label: Country or territory
+      placeholder: Example: China
+    validations:
+      required: true
+
+  - type: input
+    id: provider
+    attributes:
+      label: ISP or mobile operator
+      placeholder: Provider name; include ASN only if known
+    validations:
+      required: true
+
+  - type: dropdown
+    id: access
+    attributes:
+      label: Access type
+      options:
+        - Mobile data
+        - Fixed broadband / DSL
+        - Fiber
+        - Public Wi-Fi
+        - Corporate / organizational network
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: region
+    attributes:
+      label: Broad region
+      description: Province/state or broad region only; do not provide a precise address.
+      placeholder: Optional
+
+  - type: input
+    id: time
+    attributes:
+      label: Test date, local time, and UTC offset
+      placeholder: "2026-08-06 18:30 UTC+08:00"
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: address_family
+    attributes:
+      label: Address family observed
+      options:
+        - label: IPv4 available
+        - label: IPv6 available
+        - label: Unknown / not checked
+
+  - type: input
+    id: versions
+    attributes:
+      label: Python and Xray versions
+      placeholder: "Python 3.9.14; Xray 25.x"
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Sanitized command
+      description: Remove private paths, URLs, tokens, links, UUIDs, and identifiers.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: sample
+    attributes:
+      label: Sample description
+      description: State sample size and transport distribution without sharing configurations.
+      placeholder: "100 VMess links: 40 WebSocket, 30 gRPC, 20 RAW, 10 XHTTP"
+    validations:
+      required: true
+
+  - type: textarea
+    id: result
+    attributes:
+      label: Result summary
+      description: Include tested/accepted counts, median latency, and major failure stages.
+      placeholder: |
+        Tested: 100
+        Accepted: 18
+        Median accepted latency: 1450 ms
+        Main failures: request=61, validation=12, startup=9
+    validations:
+      required: true
+
+  - type: dropdown
+    id: repeated
+    attributes:
+      label: Was the result reproduced?
+      options:
+        - Yes, with the same network and settings
+        - Yes, and compared with another network
+        - No, this is one observation
+    validations:
+      required: true
+
+  - type: textarea
+    id: observations
+    attributes:
+      label: Additional observations
+      description: Describe time changes, endpoint effects, or transport differences. Avoid permanent country-wide conclusions.
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Privacy and evidence confirmation
+      options:
+        - label: I removed live configurations, UUIDs, tokens, private URLs, and identifying information.
+          required: true
+        - label: I understand this report is a time- and route-specific observation, not a permanent rule for an entire country or provider.
+          required: true
