@@ -11,15 +11,13 @@ import requests
 
 from vmess_types import AppError, extract_links_from_subscription
 
-APP_VERSION = "3.1.0"
+APP_VERSION = "3.1.1"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 MAX_SOURCE_BYTES = 12 * 1024 * 1024
 
 DEFAULT_SOURCES = (
     "https://raw.githubusercontent.com/Mohammadgb0078/IRV2ray/main/vmess.txt",
     "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vmess.txt",
-    "https://raw.githubusercontent.com/soroushmirzaei/telegram-configs-collector/main/protocols/vmess",
-    "https://raw.githubusercontent.com/yebekhe/TVC/main/subscriptions/xray/normal/vmess",
     "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/Eternity.txt",
     "https://raw.githubusercontent.com/mfuu/v2ray/main/v2ray",
 )
@@ -95,6 +93,15 @@ def fetch_source(url: str, session: requests.Session, retries: int,
                         raise AppError("source exceeds size limit")
                     chunks.append(chunk)
                 return b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
+        except requests.HTTPError as exc:
+            last_error = str(exc)
+            status = exc.response.status_code if exc.response is not None else None
+            if status in {404, 410}:
+                raise AppError(last_error) from exc
+            if verbose:
+                logger("[SOURCE RETRY] %s: %s" % (url, last_error))
+            if attempt < retries:
+                time.sleep(min(8.0, 1.5 * (2 ** attempt)))
         except (requests.RequestException, AppError) as exc:
             last_error = str(exc)
             if verbose:
