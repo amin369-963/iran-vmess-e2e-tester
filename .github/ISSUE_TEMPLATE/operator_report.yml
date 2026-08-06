@@ -1,0 +1,53 @@
+name: Operator / network report
+description: Share a sanitized, time-specific network observation
+title: "[Network report]: "
+labels: ["network-observation"]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not post active configurations, tokens, UUIDs, phone numbers, subscriber IDs, exact addresses, or private URLs. One observation is not a permanent operator rule."
+  - type: dropdown
+    id: operator
+    attributes:
+      label: Operator
+      options: [MCI, Irancell, TCI, Other mobile, Other fixed, Enterprise/organization]
+    validations:
+      required: true
+  - type: dropdown
+    id: access
+    attributes:
+      label: Access type
+      options: [4G/LTE, 5G, ADSL/VDSL, Fiber, Fixed wireless, Other]
+    validations:
+      required: true
+  - type: input
+    id: region
+    attributes:
+      label: Broad city or region
+      placeholder: "Tehran, west area"
+  - type: input
+    id: datetime
+    attributes:
+      label: Date and local time
+      placeholder: "2026-08-06 12:00"
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Tester and Xray versions
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Sanitized command options and test conditions
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Aggregated result
+      description: Include counts, error stages, success rates, and latency ranges; remove links and identifiers.
+    validations:
+      required: true
