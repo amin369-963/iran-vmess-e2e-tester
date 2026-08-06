@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Dict, Sequence
+from typing import Dict, List, Sequence
 
 import requests
 
@@ -107,6 +107,16 @@ def build_xray_config(config: VmessConfig, socks_port: int,
     }
 
 
+def build_probe_plan(urls: Sequence[str], minimum_attempts: int) -> List[str]:
+    """Return complete URL cycles so every endpoint has equal weight."""
+    if not urls:
+        raise AppError("at least one test URL is required")
+    if minimum_attempts < 1:
+        raise AppError("attempts must be at least 1")
+    rounds = (minimum_attempts + len(urls) - 1) // len(urls)
+    return [url for _ in range(rounds) for url in urls]
+
+
 def wait_for_port(port: int, process: subprocess.Popen, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -137,6 +147,7 @@ def test_config(config: VmessConfig, xray: Path, attempts: int,
                 allow_insecure_override: bool, verbose: bool, logger=print) -> LinkResult:
     port = free_tcp_port()
     probes = []
+    probe_plan = build_probe_plan(urls, attempts)
     with tempfile.TemporaryDirectory(prefix="vmess-test-") as temp_dir:
         config_path = Path(temp_dir) / "config.json"
         config_path.write_text(json.dumps(build_xray_config(config, port, allow_insecure_override),
@@ -169,8 +180,7 @@ def test_config(config: VmessConfig, xray: Path, attempts: int,
             proxy = "socks5h://127.0.0.1:%d" % port
             session.proxies.update({"http": proxy, "https": proxy})
             try:
-                for index in range(attempts):
-                    url = urls[index % len(urls)]
+                for url in probe_plan:
                     started = time.perf_counter()
                     try:
                         response = session.get(url, timeout=request_timeout,
