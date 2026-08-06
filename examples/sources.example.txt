@@ -1,0 +1,3 @@
+# One HTTP/HTTPS subscription source per line.
+# Do not commit private subscription URLs.
+https://example.invalid/subscription.txt
