@@ -11,6 +11,7 @@ xray.exe
 Xray/
 configs.txt
 *.subscription.txt
+results/
 v2ray_quality_vmess.txt
 v2ray_quality_report.json
-v2ray_quality_report.csv
+v2ray_quality_report.txt
