@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
+.idea/
+.vscode/
+*.log
+xray.exe
+Xray/
+configs.txt
+*.subscription.txt
+v2ray_quality_vmess.txt
+v2ray_quality_report.json
+v2ray_quality_report.csv
