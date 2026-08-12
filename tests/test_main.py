@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 import main
+import vmess_sources
 
 
 def make_link(payload):
@@ -63,6 +64,39 @@ def metadata(network_name="MCI Tehran"):
         "input_link_count": 2,
         "input_set_sha256": "abc123",
     }
+
+
+class SourceSessionTests(unittest.TestCase):
+    def test_source_session_ignores_ambient_requests_environment(self):
+        session = vmess_sources.build_source_session("")
+        try:
+            self.assertFalse(session.trust_env)
+            self.assertEqual(session.proxies, {})
+        finally:
+            session.close()
+
+    def test_explicit_source_proxy_is_still_supported(self):
+        proxy = "socks5h://127.0.0.1:1080"
+        session = vmess_sources.build_source_session(proxy)
+        try:
+            self.assertFalse(session.trust_env)
+            self.assertEqual(session.proxies["http"], proxy)
+            self.assertEqual(session.proxies["https"], proxy)
+        finally:
+            session.close()
+
+    def test_raw_github_feeds_do_not_receive_github_token(self):
+        self.assertFalse(vmess_sources.should_attach_github_token("raw.githubusercontent.com"))
+        self.assertTrue(vmess_sources.should_attach_github_token("api.github.com"))
+
+    def test_default_sources_are_current_public_vmess_feeds(self):
+        self.assertEqual(len(vmess_sources.DEFAULT_SOURCES), 4)
+        self.assertTrue(all(url.startswith("https://raw.githubusercontent.com/")
+                            for url in vmess_sources.DEFAULT_SOURCES))
+        self.assertIn(
+            "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/vmess.txt",
+            vmess_sources.DEFAULT_SOURCES,
+        )
 
 
 class VmessParserTests(unittest.TestCase):
