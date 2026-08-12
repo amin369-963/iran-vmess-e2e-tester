@@ -16,10 +16,10 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 MAX_SOURCE_BYTES = 12 * 1024 * 1024
 
 DEFAULT_SOURCES = (
-    "https://raw.githubusercontent.com/Mohammadgb0078/IRV2ray/main/vmess.txt",
-    "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vmess.txt",
-    "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/Eternity.txt",
-    "https://raw.githubusercontent.com/mfuu/v2ray/main/v2ray",
+    "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/vmess.txt",
+    "https://raw.githubusercontent.com/V2RayRoot/V2RayConfig/main/Config/vmess.txt",
+    "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/Splitted-By-Protocol/vmess.txt",
+    "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/vmess.txt",
 )
 
 PROFILES: Dict[str, Dict[str, object]] = {
@@ -55,15 +55,16 @@ def read_text_file(path: str) -> str:
         raise AppError("cannot read file %s: %s" % (path, exc)) from exc
 
 
-def is_github_host(hostname: str) -> bool:
+def should_attach_github_token(hostname: str) -> bool:
     host = hostname.lower().rstrip(".")
-    return host == "github.com" or host == "api.github.com" or host.endswith(".githubusercontent.com")
+    return host in {"github.com", "api.github.com"}
 
 
 def build_source_session(proxy_url: str) -> requests.Session:
     session = requests.Session()
     session.headers["User-Agent"] = "Iran-VMess-E2E-Tester/%s" % APP_VERSION
-    session.trust_env = not bool(proxy_url)
+    # Source fetching must not inherit ambient proxy, netrc, or other requests environment state.
+    session.trust_env = False
     if proxy_url:
         session.proxies.update({"http": proxy_url, "https": proxy_url})
     return session
@@ -75,7 +76,8 @@ def fetch_source(url: str, session: requests.Session, retries: int,
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise AppError("invalid source URL")
     headers: Dict[str, str] = {}
-    if GITHUB_TOKEN and is_github_host(parsed.hostname):
+    # Public raw.githubusercontent.com feeds do not need GitHub authentication.
+    if GITHUB_TOKEN and should_attach_github_token(parsed.hostname):
         headers["Authorization"] = "Bearer %s" % GITHUB_TOKEN
     last_error = "unknown error"
     for attempt in range(retries + 1):
