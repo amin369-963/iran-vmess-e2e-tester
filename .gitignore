@@ -15,3 +15,10 @@ results/
 v2ray_quality_vmess.txt
 v2ray_quality_report.json
 v2ray_quality_report.txt
+*.dat
+*.dll
+*.db
+LICENSE-Wintun
+.freebuff/
+out_gh/
+xray_no_window.*

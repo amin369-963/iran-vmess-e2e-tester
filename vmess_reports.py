@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -11,9 +10,17 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
-from vmess_types import AppError, LinkResult, clean_text
+from vmess_types import AppError, LinkResult, calculate_input_set_sha256, clean_text
+
+__all__ = [
+    "RunPaths", "append_history", "atomic_write_text", "calculate_input_set_sha256",
+    "create_run_paths", "generate_run_timestamp", "render_text_report",
+    "sanitize_network_name", "write_accepted_links", "write_outputs",
+]
+
+FAILURE_STAGES = ("parse", "unreachable", "validation", "startup", "request", "unexpected")
 
 
 def sanitize_network_name(value: str) -> str:
@@ -30,11 +37,6 @@ def sanitize_network_name(value: str) -> str:
     if not safe:
         raise AppError("network-name contains no valid filename characters")
     return safe[:80]
-
-
-def calculate_input_set_sha256(links: Iterable[str]) -> str:
-    payload = "\n".join(sorted(set(links))).encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()
 
 
 def generate_run_timestamp(now: Optional[datetime] = None) -> str:
@@ -57,7 +59,7 @@ def create_run_paths(output_root: Path, network_name: str, timestamp: str) -> Ru
     run_dir = output_root.expanduser() / safe_name
     return RunPaths(
         output_dir=run_dir,
-        accepted_txt=run_dir / f"{timestamp}_accepted_vmess.txt",
+        accepted_txt=run_dir / f"{timestamp}_accepted_links.txt",
         report_txt=run_dir / f"{timestamp}_report.txt",
         report_json=run_dir / f"{timestamp}_report.json",
         history_txt=output_root.expanduser() / "test_history.txt",
@@ -82,15 +84,22 @@ def atomic_write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
             pass
 
 
+def write_accepted_links(path: Path, accepted: Sequence[LinkResult]) -> None:
+    pure_links = "\n".join(item.link for item in accepted)
+    if pure_links:
+        pure_links += "\n"
+    atomic_write_text(path, pure_links, "utf-8")
+
+
 def _format_latency(value: Optional[float]) -> str:
     return "-" if value is None else f"{value:.0f} ms"
 
 
 def _normalize_failure_stage(stage: str) -> str:
     mapping = {
-        "parse": "parse", "validation": "validation", "startup": "startup",
-        "request": "request", "end-to-end": "request", "worker": "unexpected",
-        "xray-execution": "unexpected",
+        "parse": "parse", "unreachable": "unreachable", "validation": "validation",
+        "startup": "startup", "request": "request", "end-to-end": "request",
+        "worker": "unexpected", "xray-execution": "unexpected",
     }
     return mapping.get(stage, "unexpected")
 
@@ -106,6 +115,14 @@ def _redact_error_text(value: str) -> str:
     return text[:1200] or "-"
 
 
+def _protocol_summary(items: Sequence[LinkResult]) -> str:
+    counts: Dict[str, int] = {}
+    for item in items:
+        name = item.protocol or "vmess"
+        counts[name] = counts.get(name, 0) + 1
+    return ", ".join(f"{name}={counts[name]}" for name in sorted(counts)) or "-"
+
+
 def render_text_report(accepted_exported: Sequence[LinkResult],
                        all_results: Sequence[LinkResult],
                        metadata: Dict[str, object], redact_links: bool) -> str:
@@ -118,13 +135,14 @@ def render_text_report(accepted_exported: Sequence[LinkResult],
     median_accepted = statistics.median(latencies) if latencies else None
     acceptance_rate = len(accepted_all) / len(tested) * 100.0 if tested else 0.0
     scores = [item.score for item in accepted_all]
-    stage_counts = {name: 0 for name in ("parse", "validation", "startup", "request", "unexpected")}
+    stage_counts = {name: 0 for name in FAILURE_STAGES}
     for item in all_results:
         if not item.accepted:
             stage_counts[_normalize_failure_stage(item.error_stage)] += 1
 
     lines = [
-        "VMess End-to-End Test Report", "=" * 60, "", "Run information", "---------------",
+        "Proxy End-to-End Test Report", "=" * 60, "", "Run information", "---------------",
+        f"App version: {metadata.get('app_version', '-')}",
         f"Network name: {metadata.get('network_name', '-')}",
         f"Profile: {metadata.get('profile', '-')}",
         f"Date and local time: {metadata.get('generated_at_local', '-')}",
@@ -132,6 +150,7 @@ def render_text_report(accepted_exported: Sequence[LinkResult],
         f"Python version: {metadata.get('python_version', '-')}",
         f"Xray version: {metadata.get('xray_version', '-')}",
         f"Operating system: {metadata.get('operating_system', '-')}",
+        "Protocols: " + ", ".join(str(item) for item in metadata.get("protocols", [])),
         "Test URLs: " + ", ".join(str(item) for item in metadata.get("test_urls", [])),
         f"Workers: {metadata.get('workers', '-')}",
         f"Attempts: {metadata.get('attempts', '-')}",
@@ -143,29 +162,36 @@ def render_text_report(accepted_exported: Sequence[LinkResult],
         f"Sample size requested: {metadata.get('sample_requested', 0)}",
         f"Input link count: {metadata.get('input_link_count', 0)}",
         f"Input set SHA-256: {metadata.get('input_set_sha256', '-')}",
+        f"Completed: {'NO (interrupted by user)' if metadata.get('interrupted') else 'yes'}",
         "", "Summary", "-------",
         f"Collected: {metadata.get('raw_links', 0)}",
         f"Parsed: {metadata.get('unique_configs', 0)}",
         f"Parse failures: {len(parse_failures)}", f"Tested: {len(tested)}",
+        f"Not tested (interrupted): {metadata.get('not_tested_count', 0)}",
+        f"Tested by protocol: {_protocol_summary(tested)}",
         f"Accepted: {len(accepted_all)}", f"Exported accepted: {len(accepted_exported)}",
+        f"Accepted by protocol: {_protocol_summary(accepted_all)}",
         f"Rejected: {len(rejected)}", f"Acceptance rate: {acceptance_rate:.1f}%",
         f"Median accepted latency: {_format_latency(median_accepted)}",
         f"Best score: {max(scores) if scores else '-'}",
         f"Worst accepted score: {min(scores) if scores else '-'}",
         "", "Failure stages", "--------------",
-        f"parse: {stage_counts['parse']}", f"validation: {stage_counts['validation']}",
-        f"startup: {stage_counts['startup']}", f"request: {stage_counts['request']}",
-        f"unexpected: {stage_counts['unexpected']}",
-        "", "Accepted configurations", "-----------------------",
     ]
+    lines.extend(f"{name}: {stage_counts[name]}" for name in FAILURE_STAGES)
+    lines.extend(["", "Accepted configurations", "-----------------------"])
     if not accepted_exported:
         lines.append("None")
     else:
         for index, item in enumerate(accepted_exported, 1):
+            speed_str = f"{item.speed_kbps:.1f} KB/s" if getattr(item, "speed_kbps", 0.0) > 0 else "-"
+            country_str = getattr(item, "country", "") or "-"
             lines.extend([
                 f"{index:02d}. Score: {item.score}",
+                f"    Protocol: {item.protocol or 'vmess'}",
                 f"    Success rate: {item.success_rate * 100.0:.1f}%",
                 f"    Median latency: {_format_latency(item.median_latency_ms)}",
+                f"    Speed: {speed_str}",
+                f"    Location: {country_str}",
                 f"    Transport: {item.network or '-'}",
                 f"    Security: {item.transport_security or '-'}",
                 f"    Remark: {item.remark or '-'}", "    Server: [REDACTED]",
@@ -179,6 +205,7 @@ def render_text_report(accepted_exported: Sequence[LinkResult],
         for index, item in enumerate(failed, 1):
             lines.extend([
                 f"{index:02d}. Score: {item.score}",
+                f"    Protocol: {item.protocol or 'vmess'}",
                 f"    Failure stage: {_normalize_failure_stage(item.error_stage)}",
                 f"    Error: {_redact_error_text(item.error)}",
                 f"    Transport: {item.network or '-'}",
@@ -234,16 +261,15 @@ def append_history(history_path: Path, line: str) -> None:
 
 def write_outputs(output_root: Path, network_name: str, timestamp: str,
                   accepted: Sequence[LinkResult], all_results: Sequence[LinkResult],
-                  metadata: Dict[str, object], redact_links_in_report: bool = False
+                  metadata: Dict[str, object], redact_links_in_report: bool = False,
+                  allow_existing_accepted: bool = False,
                   ) -> Tuple[Path, Path, Path, Path]:
     paths = create_run_paths(output_root, network_name, timestamp)
-    targets = (paths.accepted_txt, paths.report_txt, paths.report_json)
+    targets = (paths.report_txt, paths.report_json) if allow_existing_accepted else (
+        paths.accepted_txt, paths.report_txt, paths.report_json)
     existing = [str(path) for path in targets if path.exists()]
     if existing:
         raise AppError("output files already exist; refusing to overwrite: " + ", ".join(existing))
-    pure_links = "\n".join(item.link for item in accepted)
-    if pure_links:
-        pure_links += "\n"
     payload = {
         "metadata": metadata,
         "accepted_count": len(accepted),
@@ -251,7 +277,7 @@ def write_outputs(output_root: Path, network_name: str, timestamp: str,
         "accepted": [item.to_dict() for item in accepted],
         "all_results": [item.to_dict() for item in all_results],
     }
-    atomic_write_text(paths.accepted_txt, pure_links, "utf-8")
+    write_accepted_links(paths.accepted_txt, accepted)
     atomic_write_text(paths.report_txt,
                       render_text_report(accepted, all_results, metadata, redact_links_in_report),
                       "utf-8-sig")

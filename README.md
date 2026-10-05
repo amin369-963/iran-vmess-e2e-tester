@@ -1,12 +1,18 @@
-# VMess End-to-End Tester
+# Proxy End-to-End Tester (VMess / VLESS / Trojan / Shadowsocks)
 
 [![Tests](https://github.com/amin369-963/iran-vmess-e2e-tester/actions/workflows/tests.yml/badge.svg)](https://github.com/amin369-963/iran-vmess-e2e-tester/actions/workflows/tests.yml)
 [![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A Python 3.9+ command-line tool that validates `vmess://` configurations with a real isolated **Xray Core** process and sends HTTPS requests through the resulting SOCKS5 tunnel.
+A Python 3.9+ command-line tool that validates `vmess://`, `vless://` (including REALITY), `trojan://` and `ss://` configurations with a real isolated **Xray Core** process and sends HTTPS requests through the resulting SOCKS5 tunnel.
 
-An open TCP port, a successful TLS handshake, or a responsive CDN is **not** treated as proof that a VMess configuration works.
+An open TCP port, a successful TLS handshake, or a responsive CDN is **not** treated as proof that a configuration works.
+
+Use `--protocol` (repeatable) to test only some protocols, e.g. `--protocol vless --protocol trojan`. Shadowsocks links that require a plugin are reported as parse failures.
+
+Press **Ctrl+C** at any time: running Xray processes are stopped and the results collected so far are saved (the report is marked as interrupted).
+
+`xray.exe` is found automatically when placed next to `main.py` (or in an `Xray` sub-folder); otherwise use `--xray` or `XRAY_PATH`.
 
 The project began with Iranian mobile and fixed operators, but the measurement workflow is usable on restricted or unstable networks in other countries. Profiles only tune timeouts and concurrency; they are not bypass guarantees.
 
@@ -72,7 +78,7 @@ Every run is stored separately and never overwrites an earlier run:
 ```text
 results/
 ├── MCI-Tehran/
-│   ├── 20260806_124200_accepted_vmess.txt
+│   ├── 20260806_124200_accepted_links.txt
 │   ├── 20260806_124200_report.txt
 │   └── 20260806_124200_report.json
 ├── Irancell-Tehran/
@@ -81,7 +87,7 @@ results/
 └── test_history.txt
 ```
 
-- `*_accepted_vmess.txt`: accepted links only, one raw link per line, ordered by score.
+- `*_accepted_links.txt`: accepted links only (all protocols), one raw link per line, ordered by score. Runs before v3.2.0 used `*_accepted_vmess.txt`.
 - `*_report.txt`: UTF-8 with BOM, designed to open correctly in Windows Notepad.
 - `*_report.json`: complete machine-readable technical report.
 - `test_history.txt`: append-only summary of all runs and their input hashes.
@@ -167,7 +173,8 @@ See [International Testing Guide](docs/INTERNATIONAL_TESTING.md).
 
 | Stage | Meaning | First check |
 |---|---|---|
-| `parse` | Invalid or unsupported VMess link | Base64/JSON fields and transport name |
+| `parse` | Invalid or unsupported link | Base64/JSON or URI fields, transport name, Shadowsocks cipher/plugin |
+| `unreachable` | TCP pre-check could not connect to the server | Server down, port blocked, DNS; disable with `--no-tcp-precheck` |
 | `validation` | Xray rejected the generated configuration | Xray version and transport compatibility |
 | `startup` | Local Xray SOCKS inbound did not become ready | Xray log, server reachability, local firewall |
 | `request` | Xray started but HTTPS probes failed or scored too low | Endpoint, route, DNS/TLS interference, expired account |

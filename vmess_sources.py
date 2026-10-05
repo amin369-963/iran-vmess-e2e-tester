@@ -9,17 +9,21 @@ from urllib.parse import urlparse
 
 import requests
 
-from vmess_types import AppError, extract_links_from_subscription
+from vmess_types import APP_VERSION, AppError, extract_links_from_subscription
 
-APP_VERSION = "3.1.1"
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 MAX_SOURCE_BYTES = 12 * 1024 * 1024
 
 DEFAULT_SOURCES = (
     "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/vmess.txt",
+    "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vless.txt",
+    "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/trojan.txt",
+    "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/ss.txt",
+    "https://raw.githubusercontent.com/Mohammadgb0078/IRV2ray/main/vmess.txt",
     "https://raw.githubusercontent.com/V2RayRoot/V2RayConfig/main/Config/vmess.txt",
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/Splitted-By-Protocol/vmess.txt",
     "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/vmess.txt",
+    "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/Eternity.txt",
 )
 
 PROFILES: Dict[str, Dict[str, object]] = {
@@ -27,8 +31,8 @@ PROFILES: Dict[str, Dict[str, object]] = {
                     request_timeout=12.0, startup_timeout=7.0, source_retries=2,
                     min_score=60, offline_only=False),
     "mci": dict(description="Conservative settings for MCI/mobile access", workers=3,
-                attempts=3, request_timeout=18.0, startup_timeout=9.0,
-                source_retries=3, min_score=55, offline_only=False),
+                    attempts=3, request_timeout=18.0, startup_timeout=9.0,
+                    source_retries=3, min_score=55, offline_only=False),
     "irancell": dict(description="Conservative settings for Irancell/mobile access",
                      workers=3, attempts=3, request_timeout=18.0,
                      startup_timeout=9.0, source_retries=3, min_score=55,
@@ -62,8 +66,7 @@ def should_attach_github_token(hostname: str) -> bool:
 
 def build_source_session(proxy_url: str) -> requests.Session:
     session = requests.Session()
-    session.headers["User-Agent"] = "Iran-VMess-E2E-Tester/%s" % APP_VERSION
-    # Source fetching must not inherit ambient proxy, netrc, or other requests environment state.
+    session.headers["User-Agent"] = "Iran-Proxy-E2E-Tester/%s" % APP_VERSION
     session.trust_env = False
     if proxy_url:
         session.proxies.update({"http": proxy_url, "https": proxy_url})
@@ -76,7 +79,6 @@ def fetch_source(url: str, session: requests.Session, retries: int,
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise AppError("invalid source URL")
     headers: Dict[str, str] = {}
-    # Public raw.githubusercontent.com feeds do not need GitHub authentication.
     if GITHUB_TOKEN and should_attach_github_token(parsed.hostname):
         headers["Authorization"] = "Bearer %s" % GITHUB_TOKEN
     last_error = "unknown error"
