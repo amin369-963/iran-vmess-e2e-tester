@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import hashlib
 import json
 import platform
@@ -12,11 +11,13 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Set, cast
 from urllib.parse import urlparse
 
 from vmess_db import get_db_path, get_top_reliable_configs, init_db, record_test_result
+from vmess_pipeline import run_tests
 from vmess_reports import (
     calculate_input_set_sha256, create_run_paths, generate_run_timestamp,
     sanitize_network_name, write_accepted_links, write_outputs,
@@ -38,7 +39,6 @@ DEFAULT_TEST_URLS = (
 PROTOCOL_ALIASES = {"ss": "shadowsocks"}
 PRINT_LOCK = threading.Lock()
 ACCEPTED_SAVE_INTERVAL = 50
-WAIT_SLICE_SECONDS = 0.5
 
 
 def log(message: str) -> None:
@@ -83,6 +83,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample", type=int, default=0)
     parser.add_argument("--topk", type=int, default=0, help="Export only top K accepted configurations")
     parser.add_argument("--workers", type=int, default=0)
+    parser.add_argument("--quality-workers", type=int, default=2,
+                        help="Concurrent full tests of screening survivors")
+    parser.add_argument("--single-stage", action="store_true",
+                        help="Use the previous workflow without preliminary HTTPS screening")
     parser.add_argument("--attempts", type=int, default=0)
     parser.add_argument("--request-timeout", type=float, default=0.0)
     parser.add_argument("--startup-timeout", type=float, default=0.0)
@@ -210,7 +214,9 @@ def main() -> int:
     timestamp = generate_run_timestamp(started_local)
     run_paths = create_run_paths(output_root, network_name, timestamp)
 
-    workers = args.workers or int(str(profile["workers"]))
+    two_stage = not args.single_stage and not args.no_deep_test
+    workers = args.workers or (8 if two_stage and args.profile == "default"
+                              else int(str(profile["workers"])))
     attempts = args.attempts or int(str(profile["attempts"]))
     request_timeout = args.request_timeout or float(str(profile["request_timeout"]))
     startup_timeout = args.startup_timeout or float(str(profile["startup_timeout"]))
@@ -222,6 +228,8 @@ def main() -> int:
 
     if not 1 <= workers <= 16:
         raise AppError("workers must be between 1 and 16")
+    if not 1 <= args.quality_workers <= 16:
+        raise AppError("quality-workers must be between 1 and 16")
     if not 1 <= attempts <= 10:
         raise AppError("attempts must be between 1 and 10")
     if not 0 <= min_score <= 100:
@@ -283,60 +291,48 @@ def main() -> int:
     log(f"Network={network_name} Collected={len(raw_links)} Unique={len(parsed)} Testing={len(configs)} ({protocol_summary})")
 
     results: List[LinkResult] = []
-    interrupted = False
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
-    try:
-        future_map = {
-            executor.submit(
-                test_config, config, xray, attempts, urls,
-                request_timeout, startup_timeout, min_score,
-                args.allow_insecure_server_cert, args.verbose, log,
-                not args.no_tcp_precheck, args.tcp_timeout,
-                deep_test=not args.no_deep_test,
-            ): config
-            for config in configs
-        }
-        pending = set(future_map)
-        count = 0
-        while pending:
-            done, pending = concurrent.futures.wait(
-                pending, timeout=WAIT_SLICE_SECONDS,
-                return_when=concurrent.futures.FIRST_COMPLETED)
-            for future in done:
-                config = future_map[future]
-                try:
-                    result = future.result()
-                except (subprocess.SubprocessError, OSError, AppError, RuntimeError) as e_task:
-                    result = LinkResult(config.dedup_key, config.raw, config.address,
-                                        config.port, config.network, config.transport_security,
-                                        config.remark, 0, 0.0, None, False, "worker",
-                                        f"{type(e_task).__name__}: {e_task}", [],
-                                        protocol=config.protocol)
-                if result.error_stage == "cancelled":
-                    continue
-                count += 1
-                results.append(result)
 
-                # Persist to SQLite
-                record_test_result(db_path, config, result, network_name)
+    def save_result(config: ProxyConfig, result: LinkResult) -> None:
+        # Screening survivors do not reach this callback until full testing ends.
+        record_test_result(db_path, config, result, network_name)
+        results.append(result)
+        count = len(results)
+        latency = "-" if result.median_latency_ms is None else f"{result.median_latency_ms:.0f}ms"
+        speed_txt = f" speed={result.speed_kbps:.1f}KB/s" if result.speed_kbps > 0 else ""
+        loc_txt = f" loc={result.country}" if result.country else ""
+        log(f"[{count}/{len(configs)}] {'PASS' if result.accepted else 'FAIL'} {result.protocol} score={result.score} latency={latency}{speed_txt}{loc_txt}")
+        if count % ACCEPTED_SAVE_INTERVAL == 0:
+            accepted_so_far = sorted((item for item in results if item.accepted), key=rank_key)
+            snapshot = accepted_so_far[:args.topk] if args.topk else accepted_so_far
+            write_accepted_links(run_paths.accepted_txt, snapshot)
+            log(f"Saved accepted links after {count} tested: {run_paths.accepted_txt}")
 
-                latency = "-" if result.median_latency_ms is None else f"{result.median_latency_ms:.0f}ms"
-                speed_txt = f" speed={result.speed_kbps:.1f}KB/s" if result.speed_kbps > 0 else ""
-                loc_txt = f" loc={result.country}" if result.country else ""
-                log(f"[{count}/{len(configs)}] {'PASS' if result.accepted else 'FAIL'} {result.protocol} score={result.score} latency={latency}{speed_txt}{loc_txt}")
-
-                if count % ACCEPTED_SAVE_INTERVAL == 0:
-                    accepted_so_far = sorted((accepted_cfg for accepted_cfg in results if accepted_cfg.accepted), key=rank_key)
-                    snapshot = accepted_so_far[:args.topk] if args.topk else accepted_so_far
-                    write_accepted_links(run_paths.accepted_txt, snapshot)
-                    log(f"Saved accepted links after {count} tested: {run_paths.accepted_txt}")
-    except KeyboardInterrupt:
-        interrupted = True
-        log("\n[STOPPING] Interrupted by user; stopping Xray processes and saving partial results...")
-        stop_all_processes()
-        executor.shutdown(wait=False, cancel_futures=True)
-    else:
-        executor.shutdown(wait=True)
+    full_test = partial(
+        test_config, xray=xray, attempts=attempts, urls=urls,
+        request_timeout=request_timeout, startup_timeout=startup_timeout,
+        min_score=min_score, allow_insecure_override=args.allow_insecure_server_cert,
+        verbose=args.verbose, logger=log, tcp_precheck=not args.no_tcp_precheck,
+        tcp_timeout=args.tcp_timeout, deep_test=not args.no_deep_test,
+    )
+    screen_test = partial(
+        test_config, xray=xray, attempts=1, urls=urls,
+        request_timeout=request_timeout, startup_timeout=startup_timeout,
+        min_score=0, allow_insecure_override=args.allow_insecure_server_cert,
+        verbose=args.verbose, logger=log, tcp_precheck=not args.no_tcp_precheck,
+        tcp_timeout=args.tcp_timeout, deep_test=False,
+    )
+    mode = "two-stage" if two_stage else "single-stage"
+    log(f"Testing mode={mode} workers={workers}" +
+        (f" quality-workers={args.quality_workers}" if two_stage else ""))
+    interrupted, performance = run_tests(
+        configs, screen_test if two_stage else full_test, save_result, workers,
+        quality_test=full_test if two_stage else None,
+        quality_workers=args.quality_workers, logger=log,
+    )
+    log("Testing time=%.1fs Throughput=%.1f configs/min Screening=%d Full=%d" % (
+        performance["testing_elapsed_seconds"], performance["configs_per_minute"],
+        performance["screening_completed"], performance["quality_completed"],
+    ))
 
     accepted_all = sorted((accepted_cfg for accepted_cfg in results if accepted_cfg.accepted), key=rank_key)
     accepted_exported = accepted_all[:args.topk] if args.topk else accepted_all
@@ -361,6 +357,10 @@ def main() -> int:
         "operating_system": f"{platform.system()} {platform.release()}".strip(),
         "xray_version": xray_version,
         "workers": workers, "attempts": attempts,
+        "testing_mode": mode, "deep_test": not args.no_deep_test,
+        "quality_workers": args.quality_workers if two_stage else workers,
+        "screening_attempts": 1 if two_stage else 0,
+        "performance": performance,
         "request_timeout": request_timeout, "startup_timeout": startup_timeout,
         "tcp_precheck": not args.no_tcp_precheck, "tcp_timeout": args.tcp_timeout,
         "min_score": min_score, "test_urls": urls,

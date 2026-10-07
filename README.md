@@ -109,11 +109,50 @@ python main.py ... --redact-links-in-report
 - `--sample`: randomly test at most N parsed configurations.
 - `--topk`: export only the best K accepted links.
 - `--test-url`: repeatable HTTPS endpoint used by the end-to-end probe.
-- `--workers`: concurrent isolated Xray tests.
+- `--workers`: concurrent isolated HTTPS screening tests (default profile: 8).
+- `--quality-workers`: concurrent full tests of screening survivors (default: 2).
+- `--single-stage`: use the previous testing workflow for comparison.
 - `--attempts`: HTTPS probes per configuration.
 - `--redact-links-in-report`: hide accepted links in `report.txt`.
 
 Use `python main.py --help` for the full list.
+
+## Two-stage testing
+
+Deep testing now uses two bounded worker pools. HTTPS screening checks one complete
+cycle of all configured test URLs, without speed downloads. Any successful probe
+forwards the configuration immediately to the full-test pool; the screening score
+does not decide acceptance. Only final results are written to reports and SQLite,
+so a configuration is recorded once per run. Full tests retain the configured
+attempts, timeouts, minimum score, and quality checks.
+
+```powershell
+python main.py --workers 8 --quality-workers 2
+```
+
+Non-default profiles keep their existing screening-worker counts. Explicit
+`--workers` overrides that count. `--no-deep-test` uses a single pool and keeps
+its existing behavior. Ctrl+C stops both pools and saves finalized results;
+survivors awaiting full testing count as unfinished, never accepted.
+
+Reports include testing elapsed time, finalized configurations per minute, stage
+counts, and summed worker execution times. The stages overlap, so worker-time
+sums are not elapsed time and should not be added to estimate run duration.
+Source collection time is excluded from the testing timer.
+
+For comparison on the same frozen input file:
+
+```powershell
+python main.py --seed-file configs_fixed.txt --no-default-sources --network-name Before --single-stage
+python main.py --seed-file configs_fixed.txt --no-default-sources --network-name After --workers 8 --quality-workers 2
+```
+
+Screening adds an extra Xray start and HTTPS cycle for survivors. If most
+configurations work, the full-test pool can become the bottleneck and this mode
+can be slower. Failed screening receives fewer repeated attempts than a full
+test, so transient failures can reject a configuration that a later retry would
+recover; use `--single-stage` for a more thorough comparison. Simultaneous speed
+downloads share the same internet connection, including with screening traffic.
 
 ## Using the tester outside Iran
 
