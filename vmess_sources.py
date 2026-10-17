@@ -16,14 +16,15 @@ MAX_SOURCE_BYTES = 12 * 1024 * 1024
 
 DEFAULT_SOURCES = (
     "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/vmess.txt",
-    "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vless.txt",
     "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/trojan.txt",
     "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/ss.txt",
     "https://raw.githubusercontent.com/Mohammadgb0078/IRV2ray/main/vmess.txt",
     "https://raw.githubusercontent.com/V2RayRoot/V2RayConfig/main/Config/vmess.txt",
     "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/Splitted-By-Protocol/vmess.txt",
-    "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/filtered/subs/vmess.txt",
     "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/Eternity.txt",
+    "https://raw.githubusercontent.com/mehrtat/vless-collector/main/vless.txt",
+    "https://raw.githubusercontent.com/roosterkid/openproxylist/main/V2RAY_RAW.txt",
+    "https://raw.githubusercontent.com/mrdevmohamed/v2ray-configs/main/Splitted-By-Protocol/vless.txt",
 )
 
 PROFILES: Dict[str, Dict[str, object]] = {

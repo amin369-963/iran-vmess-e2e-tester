@@ -117,6 +117,12 @@ python main.py ... --redact-links-in-report
 
 Use `python main.py --help` for the full list.
 
+The default feeds include Mehrtat's VLESS collector, OpenProxyList's raw V2Ray
+list, and mrdevmohamed's VLESS list. The bulk Barry VLESS and Matin VMess feeds
+are omitted from defaults to reduce the number of configurations tested. Feed
+sizes change over time; these are static selections, not an automatic size limit.
+Use --source-url or --sources-file to add a feed explicitly.
+
 ## Two-stage testing
 
 Deep testing now uses two bounded worker pools. HTTPS screening checks one complete
