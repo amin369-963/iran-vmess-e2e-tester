@@ -99,7 +99,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-url", action="append", default=[])
     parser.add_argument("--allow-insecure-server-cert", action="store_true")
     parser.add_argument("--network-name", default="unknown-network")
-    parser.add_argument("--output-dir", default="results")
+    parser.add_argument("--output-dir", default=str(Path(__file__).resolve().parent / "results"))
     parser.add_argument("--output-prefix", default="", help="Deprecated alias for --output-dir")
     parser.add_argument("--redact-links-in-report", action="store_true")
     parser.add_argument("--no-deep-test", action="store_true",

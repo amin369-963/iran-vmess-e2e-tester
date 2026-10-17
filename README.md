@@ -103,7 +103,7 @@ python main.py ... --redact-links-in-report
 ## Important CLI options
 
 - `--network-name`: connection label used for the output folder.
-- `--output-dir`: root output directory; default is `results`.
+- `--output-dir`: root output directory; by default, `results` beside `main.py` (independent of the launch directory).
 - `--seed-file`: local subscription or exported text.
 - `--no-default-sources`: test only the supplied local data.
 - `--sample`: randomly test at most N parsed configurations.
