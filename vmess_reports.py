@@ -187,6 +187,22 @@ def render_text_report(accepted_exported: Sequence[LinkResult],
         "", "Failure stages", "--------------",
     ]
     lines.extend(f"{name}: {stage_counts[name]}" for name in FAILURE_STAGES)
+    if metadata.get("source_priority"):
+        lines.extend(["", "Source test priority", "--------------------",
+                      "History: " + str(metadata.get("source_history_report") or "none"),
+                      "Historical quality matches current config identities; it does not prove original feed provenance.",
+                      "Shared configurations count in every containing source; each configuration is tested once."])
+        for index, source in enumerate(metadata["source_priority"], 1):
+            rate = source["history_acceptance_rate"]
+            quality = "unknown" if rate is None else "%.2f%% (%d/%d matches)" % (
+                rate * 100, source["history_accepted"], source["history_matches"])
+            lines.extend([
+                "%d. %s" % (index, source["source"]),
+                "    Configs: %d | assigned: %d | shared: %d" % (
+                    source["unique_configs"], source["assigned_configs"], source["shared_configs"]),
+                "    Historical acceptance: " + quality,
+                "    This run: %d accepted / %d tested" % (source["accepted"], source["tested"]),
+            ])
     lines.extend(["", "Accepted configurations", "-----------------------"])
     if not accepted_exported:
         lines.append("None")
@@ -203,7 +219,8 @@ def render_text_report(accepted_exported: Sequence[LinkResult],
                 f"    Location: {country_str}",
                 f"    Transport: {item.network or '-'}",
                 f"    Security: {item.transport_security or '-'}",
-                f"    Remark: {item.remark or '-'}", "    Server: [REDACTED]",
+                f"    Remark: {item.remark or '-'}", "    Sources: " + (", ".join(item.sources) or "unknown"),
+                "    Server: [REDACTED]",
                 f"    Link: {'[REDACTED]' if redact_links else item.link}", "",
             ])
     lines.extend(["Rejected configurations", "-----------------------"])
@@ -219,7 +236,8 @@ def render_text_report(accepted_exported: Sequence[LinkResult],
                 f"    Error: {_redact_error_text(item.error)}",
                 f"    Transport: {item.network or '-'}",
                 f"    Security: {item.transport_security or '-'}",
-                f"    Remark: {item.remark or '-'}", "    Server: [REDACTED]", "",
+                f"    Remark: {item.remark or '-'}", "    Sources: " + (", ".join(item.sources) or "unknown"),
+                "    Server: [REDACTED]", "",
             ])
     return "\n".join(lines).rstrip() + "\n"
 

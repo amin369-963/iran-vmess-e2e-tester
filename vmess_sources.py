@@ -4,12 +4,14 @@ from __future__ import annotations
 import os
 import time
 from pathlib import Path
-from typing import Dict, Sequence, Set
+from typing import Dict, Optional, Sequence, Set
 from urllib.parse import urlparse
 
 import requests
 
 from vmess_types import APP_VERSION, AppError, extract_links_from_subscription
+from vmess_telegram import collect_telegram_links, telegram_preview_url
+from vmess_priority import source_label
 
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "").strip()
 MAX_SOURCE_BYTES = 12 * 1024 * 1024
@@ -25,6 +27,9 @@ DEFAULT_SOURCES = (
     "https://raw.githubusercontent.com/mehrtat/vless-collector/main/vless.txt",
     "https://raw.githubusercontent.com/roosterkid/openproxylist/main/V2RAY_RAW.txt",
     "https://raw.githubusercontent.com/mrdevmohamed/v2ray-configs/main/Splitted-By-Protocol/vless.txt",
+    "https://t.me/s/daily_configs",
+    "https://t.me/s/vpnfail_v2ray",
+    "https://t.me/s/v2raycollector",
 )
 
 PROFILES: Dict[str, Dict[str, object]] = {
@@ -117,16 +122,32 @@ def fetch_source(url: str, session: requests.Session, retries: int,
 
 
 def collect_links(sources: Sequence[str], seed_file: str, session: requests.Session,
-                  retries: int, timeout: float, verbose: bool, logger=print) -> Set[str]:
+                  retries: int, timeout: float, verbose: bool, logger=print,
+                  source_links: Optional[Dict[str, Set[str]]] = None,
+                  telegram_limit: int = 50, telegram_hours: int = 24,
+                  protocols: Optional[Set[str]] = None) -> Set[str]:
     links: Set[str] = set()
     if seed_file:
-        links.update(extract_links_from_subscription(read_text_file(seed_file)))
+        seeded = set(extract_links_from_subscription(read_text_file(seed_file)))
+        links.update(seeded)
+        if source_links is not None:
+            source_links["seed:" + Path(seed_file).name] = seeded
     for index, source in enumerate(sources, 1):
+        if source_links is not None:
+            source_links[source] = set()
         try:
-            text = fetch_source(source, session, retries, timeout, verbose, logger)
-            found = extract_links_from_subscription(text)
+            if telegram_preview_url(source) is not None:
+                found = collect_telegram_links(
+                    source, lambda page: fetch_source(page, session, retries, timeout, verbose, logger),
+                    telegram_limit, telegram_hours, logger=logger, protocols=protocols,
+                )
+            else:
+                text = fetch_source(source, session, retries, timeout, verbose, logger)
+                found = extract_links_from_subscription(text)
             links.update(found)
-            logger("[SOURCE %d/%d] %d links" % (index, len(sources), len(found)))
+            if source_links is not None:
+                source_links[source].update(found)
+            logger("[SOURCE %d/%d] %s: %d links" % (index, len(sources), source_label(source), len(found)))
         except AppError as exc:
-            logger("[SOURCE %d/%d] failed: %s" % (index, len(sources), exc))
+            logger("[SOURCE %d/%d] %s failed: %s" % (index, len(sources), source_label(source), exc))
     return links

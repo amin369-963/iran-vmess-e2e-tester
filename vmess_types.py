@@ -115,6 +115,7 @@ class LinkResult:
     speed_kbps: float = 0.0
     country: str = ""
     ip: str = ""
+    sources: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, object]:
         return asdict(self)

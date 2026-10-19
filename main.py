@@ -18,6 +18,7 @@ from urllib.parse import urlparse
 
 from vmess_db import get_db_path, get_top_reliable_configs, init_db, record_test_result
 from vmess_pipeline import run_tests
+from vmess_priority import load_recent_results, prioritize_configs, source_label
 from vmess_reports import (
     calculate_input_set_sha256, create_run_paths, generate_run_timestamp,
     sanitize_network_name, write_accepted_links, write_outputs,
@@ -80,6 +81,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-url", action="append", default=[])
     parser.add_argument("--no-default-sources", action="store_true")
     parser.add_argument("--source-proxy", default="")
+    parser.add_argument("--telegram-limit", type=int, default=50,
+                        help="Maximum unique supported configurations per Telegram channel (1..500)")
+    parser.add_argument("--telegram-hours", type=int, default=24,
+                        help="Only read Telegram posts from the last N hours (1..168)")
     parser.add_argument("--sample", type=int, default=0)
     parser.add_argument("--topk", type=int, default=0, help="Export only top K accepted configurations")
     parser.add_argument("--workers", type=int, default=0)
@@ -236,6 +241,8 @@ def main() -> int:
         raise AppError("min-score must be between 0 and 100")
     if args.sample < 0 or args.topk < 0:
         raise AppError("sample and topk cannot be negative")
+    if not 1 <= args.telegram_limit <= 500 or not 1 <= args.telegram_hours <= 168:
+        raise AppError("telegram-limit must be 1..500 and telegram-hours must be 1..168")
     try:
         import socks  # type: ignore  # noqa: F401
     except ImportError as e_socks:
@@ -243,45 +250,70 @@ def main() -> int:
 
     urls = validate_test_urls(args.test_url or DEFAULT_TEST_URLS)
 
-    sources: Set[str] = set()
+    sources: List[str] = []
     if not args.no_default_sources and not offline_only:
-        sources.update(DEFAULT_SOURCES)
+        sources.extend(DEFAULT_SOURCES)
     if args.sources_file:
         for line in read_text_file(args.sources_file).splitlines():
             line = line.strip()
             if line and not line.startswith("#"):
-                sources.add(line)
-    sources.update(src.strip() for src in args.source_url if src.strip())
+                sources.append(line)
+    sources.extend(src.strip() for src in args.source_url if src.strip())
+    sources = list(dict.fromkeys(sources))
     if offline_only:
         sources.clear()
     if not sources and not args.seed_file:
         raise AppError("provide --seed-file or at least one source URL")
 
     session = build_source_session(args.source_proxy)
+    source_links: Dict[str, Set[str]] = {}
     try:
-        collected = collect_links(sorted(sources), args.seed_file, session,
-                                  retries, args.source_timeout, args.verbose, log)
+        collected = collect_links(sources, args.seed_file, session,
+                                  retries, args.source_timeout, args.verbose, log,
+                                  source_links=source_links, telegram_limit=args.telegram_limit,
+                                  telegram_hours=args.telegram_hours, protocols=set(protocols))
     finally:
         session.close()
     raw_links = {link for link in collected if link_protocol(link) in protocols}
     input_hash = calculate_input_set_sha256(raw_links)
 
     parsed: Dict[str, ProxyConfig] = {}
+    link_keys: Dict[str, str] = {}
     parse_failures: List[LinkResult] = []
     for link in sorted(raw_links):
         try:
             config = parse_link(link)
             parsed.setdefault(config.dedup_key, config)
+            link_keys[link] = config.dedup_key
         except AppError as e_parse:
             parse_failures.append(LinkResult(
                 hashlib.sha256(link.encode("utf-8")).hexdigest(), link, "", 0,
                 "", "", "", 0, 0.0, None, False, "parse", str(e_parse), [],
                 protocol=link_protocol(link),
+                sources=[source_label(source) for source, links in source_links.items() if link in links],
             ))
     configs = list(parsed.values())
     if args.sample and len(configs) > args.sample:
         random.SystemRandom().shuffle(configs)
         configs = configs[:args.sample]
+
+    history_settings = {
+        "network_name": network_name, "profile": args.profile, "attempts": attempts,
+        "deep_test": not args.no_deep_test, "min_score": min_score, "test_urls": urls,
+        "request_timeout": request_timeout, "startup_timeout": startup_timeout,
+        "tcp_precheck": not args.no_tcp_precheck, "tcp_timeout": args.tcp_timeout,
+        "allow_insecure_server_cert": args.allow_insecure_server_cert,
+    }
+    history, history_report = load_recent_results(run_paths.output_dir, history_settings, log)
+    configs, source_priority, config_sources = prioritize_configs(configs, source_links, link_keys, history)
+    log("[SOURCE PRIORITY] History=%s; successful sources, unknown sources, failed-only sources; fewer configs break ties" %
+        (history_report or "none"))
+    for index, row in enumerate(source_priority, 1):
+        rate = row["history_acceptance_rate"]
+        quality = "unknown" if rate is None else "%.2f%% (%d/%d matches)" % (
+            rate * 100, row["history_accepted"], row["history_matches"])
+        log("[TEST ORDER %d] %s configs=%d assigned=%d historical-acceptance=%s" % (
+            index, row["source"], row["unique_configs"], row["assigned_configs"], quality))
 
     per_protocol: Dict[str, int] = {}
     for config in configs:
@@ -294,13 +326,19 @@ def main() -> int:
 
     def save_result(config: ProxyConfig, result: LinkResult) -> None:
         # Screening survivors do not reach this callback until full testing ends.
+        origin_indices = config_sources.get(config.dedup_key, [])
+        result.sources = [source_priority[index]["source"] for index in origin_indices]
         record_test_result(db_path, config, result, network_name)
         results.append(result)
+        for index in origin_indices:
+            source_priority[index]["tested"] += 1
+            source_priority[index]["accepted"] += int(result.accepted)
         count = len(results)
         latency = "-" if result.median_latency_ms is None else f"{result.median_latency_ms:.0f}ms"
         speed_txt = f" speed={result.speed_kbps:.1f}KB/s" if result.speed_kbps > 0 else ""
         loc_txt = f" loc={result.country}" if result.country else ""
-        log(f"[{count}/{len(configs)}] {'PASS' if result.accepted else 'FAIL'} {result.protocol} score={result.score} latency={latency}{speed_txt}{loc_txt}")
+        origin_txt = " source=" + result.sources[0] if result.sources else ""
+        log(f"[{count}/{len(configs)}] {'PASS' if result.accepted else 'FAIL'} {result.protocol} score={result.score} latency={latency}{speed_txt}{loc_txt}{origin_txt}")
         if count % ACCEPTED_SAVE_INTERVAL == 0:
             accepted_so_far = sorted((item for item in results if item.accepted), key=rank_key)
             snapshot = accepted_so_far[:args.topk] if args.topk else accepted_so_far
@@ -336,6 +374,8 @@ def main() -> int:
 
     accepted_all = sorted((accepted_cfg for accepted_cfg in results if accepted_cfg.accepted), key=rank_key)
     accepted_exported = accepted_all[:args.topk] if args.topk else accepted_all
+    for row in source_priority:
+        row["acceptance_rate"] = row["accepted"] / row["tested"] if row["tested"] else None
     complete = sorted(parse_failures + results,
                       key=lambda res_item: (not res_item.accepted, -res_item.score, res_item.address, res_item.port))
     if args.seed_file and sources:
@@ -365,6 +405,10 @@ def main() -> int:
         "tcp_precheck": not args.no_tcp_precheck, "tcp_timeout": args.tcp_timeout,
         "min_score": min_score, "test_urls": urls,
         "source_mode": source_mode,
+        "source_history_report": history_report or None,
+        "source_priority": source_priority,
+        "telegram_limit": args.telegram_limit, "telegram_hours": args.telegram_hours,
+        "allow_insecure_server_cert": args.allow_insecure_server_cert,
         "seed_file": Path(args.seed_file).name if args.seed_file else "-",
         "sample_requested": args.sample, "topk_requested": args.topk,
         "raw_links": len(raw_links), "unique_configs": len(parsed),

@@ -44,7 +44,7 @@ class SourceSessionTests(unittest.TestCase):
 
     def test_default_sources_contain_public_feeds(self):
         self.assertTrue(len(vmess_sources.DEFAULT_SOURCES) >= 4)
-        self.assertTrue(all(url.startswith("https://raw.githubusercontent.com/")
+        self.assertTrue(all(url.startswith(("https://raw.githubusercontent.com/", "https://t.me/s/"))
                             for url in vmess_sources.DEFAULT_SOURCES))
 
 

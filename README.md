@@ -123,6 +123,52 @@ are omitted from defaults to reduce the number of configurations tested. Feed
 sizes change over time; these are static selections, not an automatic size limit.
 Use --source-url or --sources-file to add a feed explicitly.
 
+## Telegram channels and test priority
+
+The defaults now include `daily_configs`, `vpnfail_v2ray`, and `v2raycollector`.
+Public channel previews are read over HTTPS; no Telegram login, bot, or new
+dependency is required. Only dated post text is processed. Restricted/private
+channels and unavailable previews produce a source error. Use `--source-proxy`
+when Telegram cannot be reached directly.
+
+By default, each channel contributes at most 50 unique parsable configurations
+matching the selected protocols
+from the last 24 hours, scanning at most 10 preview pages. Use
+`--telegram-limit 50 --telegram-hours 24` to set these bounds (limits: 1..500
+configurations and 1..168 hours). This is a bounded recent sample, not a promise
+to retrieve every post in that period. Other protocols, attachments, and old
+posts are ignored. Existing web feeds retain their previous size limits.
+
+Test submission now follows source priority instead of alphabetical URI order:
+
+1. Sources containing previously accepted configurations, by historical
+   acceptance rate (highest first).
+2. Sources with no matching historical tests.
+3. Sources whose matching historical tests all failed.
+
+Within each quality level, smaller sources go first. Quality uses exact
+configuration identity matches in the latest completed compatible report for the
+same network/profile/probe settings, at most seven days old. It never infers
+source ownership from remarks. Existing reports are usable; their missing
+certificate-override flag is treated as the old default (off), so they provide
+scheduling hints only. Every configuration is fully retested before acceptance.
+Sources with fewer than five historical matches are explicitly shown as `unknown`;
+one successful configuration cannot establish a source's quality.
+
+Within a source, past accepted configurations go first (higher scores first),
+then unmeasured configurations, then past failures. Parallel workers can finish
+out of order. A shared configuration is submitted once, through its highest
+priority source. `--sample` retains random selection, then prioritizes that subset.
+Changing order aims to find useful configurations earlier; it does not promise
+a shorter complete run when the total number of configurations stays the same.
+
+Reports now include each result's `sources` and a `source_priority` summary with
+collected/unique/assigned/shared counts, historical matches, and current
+tested/accepted counts. Shared results contribute to every containing source's
+statistics; those source totals must not be added together. Source labels omit
+URL credentials and query strings. All sources are retained until measurements
+justify removal.
+
 ## Two-stage testing
 
 Deep testing now uses two bounded worker pools. HTTPS screening checks one complete
