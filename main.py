@@ -443,6 +443,7 @@ def main() -> int:
         "run_timestamp": timestamp,
         "generated_at_local": started_local.strftime("%Y-%m-%d %H:%M:%S %z"),
         "generated_at_utc": started_utc.isoformat(),
+        "testing_completed_at_utc": datetime.now(timezone.utc).isoformat(),
         "network_name": network_name,
         "network_name_safe": safe_network_name,
         "profile": args.profile,

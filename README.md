@@ -180,6 +180,58 @@ With the default two test URLs, use `--attempts 3` or higher to get at least fou
 
 The TCP precheck is not used for UDP-based mKCP transports. Optional quality downloads stop reading after **512 KiB**; this is a byte cap, not a hard wall-time guarantee. A reported success is valid only for the testing machine/network and observation time, **not** proof of availability on Iranian ISPs.
 
+## Private subscription preview — offline only
+
+The program can create **local** Hiddify/v2rayNG-compatible subscription files
+from a **completed, unexpired E2E report**. This is a validation stage only:
+**no GitHub Pages, no upload, no scheduling, no public link**. These URIs
+contain server credentials; never commit or share the preview or the original
+JSON report without explicit permission to redistribute the underlying accounts.
+
+After finishing a normal end-to-end run, locate its
+`results/<network>/<timestamp>_report.json` file and run:
+
+~~~powershell
+python vmess_subscription.py build `
+  --report "results\MyNetwork\20261116_110000_report.json" `
+  --output-dir "results\private_preview\run_01" `
+  --ttl-hours 24 `
+  --max-items 100
+
+python vmess_subscription.py validate `
+  --directory "results\private_preview\run_01"
+~~~
+
+Replace the report path with an **actual generated path**; the example is not
+a file created by this documentation. Use a **new** output directory each time;
+existing output is never overwritten. Previews inside the source repository
+are restricted to the ignored `results/` tree. The output folder contains
+only:
+
+- `configs.txt` — one proxy URI per line (UTF-8 LF, Hiddify-compatible).
+- `configs_base64.txt` — Base64 encoding of the exact plain file, suitable for
+  clients accepting standard encoded subscriptions.
+- `status.json` — private-only manifest with counts, completion/expiry UTC,
+  unverified vantage-label hash, report SHA-256, and SHA-256/byte length for
+  both subscription files. No raw links or credentials in the manifest.
+
+The validator checks a complete/non-interrupted run, compatible identity
+version, freshness from **actual testing completion** (not test start),
+consistent counts and identities, a full **3-of-4 or better HTTP 204** evidence
+gate covering two endpoints, and plain/Base64 parity. A high score cannot
+override missing HTTPS evidence. It rejects empty, expired, incomplete,
+tampered, duplicate, oversized, or already-existing outputs. The default
+freshness TTL is **24 hours**, configurable from **1–72 hours**; the maximum
+preview size is **200 entries**, but the default `--max-items` is 100.
+
+**Important:** Status validation only checks the preview **when invoked**.
+Hiddify/v2rayNG do not necessarily read `status.json` or stop using an
+expired static subscription. Nor does success on a GitHub Runner imply
+success on MCI, Irancell or TCI. A user's network label is not independent
+network-vantage verification. **Permission to redistribute** public proxy
+credentials and a separate publishing/expiry policy are still prerequisites
+to any public/scheduled subscription.
+
 ## Optional pilot-source evaluation (no automatic publishing)
 
 Three candidate **public feeds**, independently reviewed in [Issue #3](https://github.com/amin369-963/iran-vmess-e2e-tester/issues/3), are **disabled by default**:
