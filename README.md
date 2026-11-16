@@ -184,31 +184,31 @@ The TCP precheck is not used for UDP-based mKCP transports. Optional quality dow
 
 Three candidate **public feeds**, independently reviewed in [Issue #3](https://github.com/amin369-963/iran-vmess-e2e-tester/issues/3), are **disabled by default**:
 
-- \`multi-fetcher\` — 4n0nymou3/multi-proxy-config-fetcher (LIGHT)
-- \`reference-verified\` — 0xRadikal/Free-v2ray-Configs/verified (LIGHT)
-- \`au1rxx\` — Au1rxx/free-vpn-subscriptions (LIGHT)
+- `multi-fetcher` — 4n0nymou3/multi-proxy-config-fetcher (LIGHT)
+- `reference-verified` — 0xRadikal/Free-v2ray-Configs/verified (LIGHT)
+- `au1rxx` — Au1rxx/free-vpn-subscriptions (LIGHT)
 
 Their repository licenses do **not** automatically authorize redistribution of every included proxy credential. No subscription publisher is enabled. Evaluate them privately with the existing end-to-end verifier, for example:
 
 ~~~powershell
-python main.py \`
-  --xray "D:\v2ray\pythonProject\Xray\xray.exe" \`
-  --no-default-sources \`
-  --pilot-source multi-fetcher \`
-  --pilot-source reference-verified \`
-  --pilot-source au1rxx \`
-  --sample 60 \`
-  --sample-seed 12345 \`
+python main.py `
+  --xray "D:\v2ray\pythonProject\Xray\xray.exe" `
+  --no-default-sources `
+  --pilot-source multi-fetcher `
+  --pilot-source reference-verified `
+  --pilot-source au1rxx `
+  --sample 60 `
+  --sample-seed 12345 `
   --network-name "Local-Pilot"
 ~~~
 
-For a real **incremental comparison with the default sources**, remove \`--no-default-sources\`. Then each source's \`accepted_exclusive\` metric counts accepted identities contributed by that source **alone** within the tested selection; \`pilot_incremental_accepted\` counts accepted pilot identities absent from available non-pilot input sources. These figures are **not additive** across overlapping feeds and do **not** establish reliability on an Iranian ISP unless tested from that actual network. If there is no usable non-pilot baseline, incremental yield is \`null\`, not a fabricated zero.
+For a real **incremental comparison with the default sources**, remove `--no-default-sources`. Then each source's `accepted_exclusive` metric counts accepted identities contributed by that source **alone** within the tested selection; `pilot_incremental_accepted` counts accepted pilot identities absent from available non-pilot input sources. These figures are **not additive** across overlapping feeds and do **not** establish reliability on an Iranian ISP unless tested from that actual network. If there is no usable non-pilot baseline, incremental yield is `null`, not a fabricated zero.
 
-All sampled runs record \`input_set_sha256\`, \`selection_set_sha256\` and optionally \`sample_seed\`. The seed reproduces selection only when the input set is unchanged. Download reports distinguish successful/empty/invalid/failed/capped/budget-skipped feeds, successful fetch bytes, and selected candidate counts. All source paths and query strings are replaced by stable hashed IDs in logs/reports.
+All sampled runs record `input_set_sha256`, `selection_set_sha256` and optionally `sample_seed`. The seed reproduces selection only when the input set is unchanged. Download reports distinguish successful/empty/invalid/failed/capped/budget-skipped feeds, successful fetch bytes, and selected candidate counts. All source paths and query strings are replaced by stable hashed IDs in logs/reports.
 
 **Input controls:** Remote feeds must use HTTPS without URL userinfo, unsafe ports, fragments or automatic redirects. Obvious loopback/private IPs and local hostnames are rejected. Up to 32 remote sources, 12 MiB per ordinary feed, 2 MiB per pilot, 1,500 distinct identities per pilot, and 64 MiB total successful decoded feed intake by default; the global received-byte meter includes failed and retried responses. Partial oversized feeds are **rejected**, not silently truncated. Source timeouts and per-chunk elapsed-time checks are **not** a hard guarantee against arbitrarily slow streams or DNS rebinding. Full protection against custom-host DNS rebinding requires a separate network binding design; use only explicitly trusted public feeds.
 
-**Identity compatibility:** Version 3.3 adopts \`identity_version=2\` to distinguish connection-affecting ALPN/fingerprint/TLS/header/spiderX variants. Existing SQLite rows/reports are preserved but **not** treated as v2 historical matches. Historical reliability should be rebuilt with new verified runs; the old rows are not deleted.
+**Identity compatibility:** Version 3.3 adopts `identity_version=2` to distinguish connection-affecting ALPN/fingerprint/TLS/header/spiderX variants. Existing SQLite rows/reports are preserved but **not** treated as v2 historical matches. Historical reliability should be rebuilt with new verified runs; the old rows are not deleted.
 
 ## Two-stage testing
 
