@@ -459,7 +459,7 @@ def _run_once(config: ProxyConfig, xray: Path, temp_dir: Path, port: int,
 
             probes = _run_probes(port, probe_plan, request_timeout)
             speed_kbps, country, ip, blocked_passed = 0.0, "", "", 0
-            if deep_test and any(p.success for p in probes) and not STOP_EVENT.is_set():
+            if deep_test and _primary_probes_verified(probes, probe_plan) and not STOP_EVENT.is_set():
                 speed_kbps, country, ip, blocked_passed = _deep_quality_assessment(port, request_timeout)
 
             return "", "", probes, False, speed_kbps, country, ip, blocked_passed
@@ -505,7 +505,7 @@ def test_config(config: ProxyConfig, xray: Path, attempts: int,
 
     if stage:
         return _failure(config, stage, error)
-    if STOP_EVENT.is_set() and len(probes) < len(probe_plan):
+    if STOP_EVENT.is_set():
         return _failure(config, "cancelled", "run interrupted")
 
     insecure = config.transport_security == "tls" and bool(
