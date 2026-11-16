@@ -161,7 +161,11 @@ class BoundedSpeedTests(TestCase):
         session = mock.Mock()
         session.proxies = {}
         session.get.side_effect = [trace, video, speed]
-        with mock.patch("vmess_xray.requests.Session", return_value=session):
+        # A synthetic in-memory response completes in <50 ms; set a
+        # deterministic elapsed time so the throughput metric is populated.
+        with mock.patch("vmess_xray.requests.Session", return_value=session), \
+             mock.patch("vmess_xray.time.perf_counter",
+                        side_effect=[100.0, 101.0]):
             throughput, country, ip, blocked = _deep_quality_assessment(
                 port=10808, request_timeout=2.0)
         self.assertGreater(throughput, 0.0)
