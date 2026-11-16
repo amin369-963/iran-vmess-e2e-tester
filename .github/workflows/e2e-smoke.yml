@@ -1,0 +1,58 @@
+name: Controlled Xray E2E Smoke
+
+on:
+  pull_request:
+    paths:
+      - "vmess_xray.py"
+      - "tests/e2e_live_smoke.py"
+      - ".github/workflows/e2e-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  loopback:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9.14"
+      - run: python -m pip install -r requirements.txt
+
+      - name: Fetch and verify reviewed Xray release archive
+        shell: bash
+        env:
+          XRAY_SHA256: b651f7e1d9966ee2c1b1ee1bf8b52c72771824d3065dce96bbc8bcc19ed95f82
+        run: |
+          set -euo pipefail
+          curl --fail --location --show-error --silent --retry 2 \
+            --connect-timeout 20 --max-time 120 \
+            https://github.com/XTLS/Xray-core/releases/download/v26.11.9/Xray-linux-64.zip \
+            --output "$RUNNER_TEMP/xray-linux-64.zip"
+          printf '%s  %s\n' "$XRAY_SHA256" "$RUNNER_TEMP/xray-linux-64.zip" | sha256sum --check
+          python - <<'PY'
+          import os
+          import pathlib
+          import shutil
+          import zipfile
+          root = pathlib.Path(os.environ["RUNNER_TEMP"])
+          target = root / "xray-smoke"
+          target.mkdir(parents=True, exist_ok=True)
+          with zipfile.ZipFile(str(root / "xray-linux-64.zip")) as archive:
+              member = archive.getinfo("xray")
+              if member.file_size <= 0 or member.file_size > 120 * 1024 * 1024:
+                  raise RuntimeError("unexpected Xray executable size")
+              with archive.open(member) as source, (target / "xray").open("wb") as output:
+                  shutil.copyfileobj(source, output)
+          PY
+          chmod 755 "$RUNNER_TEMP/xray-smoke/xray"
+          "$RUNNER_TEMP/xray-smoke/xray" version
+          printf 'XRAY_PATH=%s\n' "$RUNNER_TEMP/xray-smoke/xray" >> "$GITHUB_ENV"
+
+      - name: Real HTTPS through isolated Xray client and local VLESS server
+        run: python tests/e2e_live_smoke.py
