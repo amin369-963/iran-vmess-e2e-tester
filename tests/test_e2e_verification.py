@@ -154,7 +154,7 @@ class BoundedSpeedTests(TestCase):
                 emitted.append(1)
                 yield b"x" * 16384
 
-        trace = DummyResponse(200, text="ip=192.0.2.10\\nloc=US")
+        trace = DummyResponse(200, text="ip=192.0.2.10\nloc=US")
         video = DummyResponse(204)
         speed = DummyResponse(200)
         speed.iter_content = mock.Mock(return_value=endless_chunks())
