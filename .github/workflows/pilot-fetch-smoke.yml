@@ -1,0 +1,31 @@
+name: Bounded Pilot Feed Intake
+
+on:
+  pull_request:
+    paths:
+      - "vmess_sources.py"
+      - "vmess_types.py"
+      - "tests/pilot_fetch_smoke.py"
+      - ".github/workflows/pilot-fetch-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  public-feed-intake:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9.14"
+      - name: Install exact application dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Collect and parse only (no Xray, no publication)
+        env:
+          GITHUB_TOKEN: ""
+        run: python tests/pilot_fetch_smoke.py

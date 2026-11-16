@@ -1,0 +1,105 @@
+name: Controlled Pilot E2E Evaluation
+
+# Opt-in manual evaluation only: proxy probe traffic must never run on every PR.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-candidates:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.9.14"
+      - run: python -m pip install -r requirements.txt
+
+      - name: Fetch pinned verified Xray Core executable
+        shell: bash
+        env:
+          XRAY_SHA256: b651f7e1d9966ee2c1b1ee1bf8b52c72771824d3065dce96bbc8bcc19ed95f82
+        run: |
+          set -euo pipefail
+          curl --fail --location --show-error --silent --retry 2 --connect-timeout 20 --max-time 120 \
+            https://github.com/XTLS/Xray-core/releases/download/v26.11.9/Xray-linux-64.zip \
+            --output "$RUNNER_TEMP/xray-linux-64.zip"
+          printf '%s  %s\n' "$XRAY_SHA256" "$RUNNER_TEMP/xray-linux-64.zip" | sha256sum --check
+          python - <<'PY'
+          import os
+          import pathlib
+          import shutil
+          import zipfile
+          root = pathlib.Path(os.environ["RUNNER_TEMP"])
+          target = root / "xray-pilot"
+          target.mkdir(parents=True, exist_ok=True)
+          with zipfile.ZipFile(str(root / "xray-linux-64.zip")) as archive:
+              item = archive.getinfo("xray")
+              if item.file_size <= 0 or item.file_size > 120 * 1024 * 1024:
+                  raise RuntimeError("unexpected Xray executable size")
+              with archive.open(item) as source, (target / "xray").open("wb") as output:
+                  shutil.copyfileobj(source, output)
+          PY
+          chmod 755 "$RUNNER_TEMP/xray-pilot/xray"
+          "$RUNNER_TEMP/xray-pilot/xray" version
+          printf 'XRAY_PATH=%s\n' "$RUNNER_TEMP/xray-pilot/xray" >> "$GITHUB_ENV"
+
+      - name: Evaluate 30 opt-in candidate nodes (no publication)
+        env:
+          GITHUB_TOKEN: ""
+        run: |
+          python main.py \
+            --xray "$XRAY_PATH" \
+            --no-default-sources \
+            --pilot-source multi-fetcher \
+            --pilot-source reference-verified \
+            --pilot-source au1rxx \
+            --source-budget-mib 8 \
+            --source-timeout 12 \
+            --sample 30 \
+            --sample-seed 20261116 \
+            --topk 30 \
+            --single-stage \
+            --no-deep-test \
+            --workers 4 \
+            --attempts 3 \
+            --min-score 0 \
+            --request-timeout 7 \
+            --network-name GithubPilot
+
+      - name: Print redacted E2E summary (never upload private report/SQLite)
+        run: |
+          python - <<'PY'
+          import glob
+          import json
+          files = glob.glob("results/GithubPilot/*_report.json")
+          if len(files) != 1:
+              raise RuntimeError("exactly one completed report required")
+          with open(files[0], encoding="utf-8") as report:
+              record = json.load(report)
+          m = record["metadata"]
+          if m["interrupted"] or m["tested_count"] != 30:
+              raise RuntimeError("incomplete or unexpectedly small evaluation")
+          summary = {
+              "vantage": "github-actions/ubuntu-24.04",
+              "input_set_sha256": m["input_set_sha256"],
+              "selection_set_sha256": m["selection_set_sha256"],
+              "unique_collected": m["unique_configs"],
+              "tested": m["tested_count"],
+              "verified_at_this_vantage": m["accepted_total"],
+              "pilot_exclusive_verified": [
+                  {"pilot": row["fetch"].get("pilot_id"),
+                   "tested": row["tested"],
+                   "accepted": row["accepted"],
+                   "exclusive": row["accepted_exclusive"]}
+                  for row in m["source_priority"] if row["fetch"].get("pilot_id")
+              ],
+          }
+          print(json.dumps(summary, sort_keys=True))
+          print("No Iranian ISP tests performed; no public subscription published.")
+          PY

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -122,8 +123,11 @@ class PriorityTests(unittest.TestCase):
                    for i, accepted, score in [(1, True, 80), (2, True, 90),
                                               (4, False, 0), (5, True, 65), (6, False, 0)]}
         ordered, rows, memberships = prioritize_configs(configs, sources, keys, history, min_matches=1)
-        self.assertEqual([row['source'].rsplit('/', 1)[-1] for row in rows],
-                         ['small', 'large', 'lower-rate', 'unknown', 'failed'])
+        expected = ['small', 'large', 'lower-rate', 'unknown', 'failed']
+        self.assertEqual(
+            [row['source_id'] for row in rows],
+            [hashlib.sha256(('https://example.com/' + name).encode()).hexdigest()[:12]
+             for name in expected])
         self.assertEqual([c.address for c in ordered],
                          ['server1.example', 'server2.example', 'server5.example',
                           'server6.example', 'server3.example', 'server4.example'])
@@ -171,7 +175,8 @@ class PriorityTests(unittest.TestCase):
         first = source_label('https://user:secret@example.com:8443/feed?token=hidden')
         self.assertNotIn('secret', first)
         self.assertNotIn('hidden', first)
-        self.assertIn(':8443/feed', first)
+        self.assertIn(':8443/[id:', first)
+        self.assertNotIn('/feed', first)
         self.assertNotEqual(first, source_label('https://user:other@example.com:8443/feed?token=changed'))
 
     def test_main_submits_quality_order_and_reports_all_source_memberships(self):
@@ -180,7 +185,8 @@ class PriorityTests(unittest.TestCase):
             report_dir = root/'Test'
             report_dir.mkdir()
             configs = [parse_link(uri(i)) for i in range(1, 10)]
-            metadata = {'network_name': 'Test', 'profile': 'default', 'attempts': 3,
+            metadata = {'identity_version': 2, 'network_name': 'Test',
+                        'profile': 'default', 'attempts': 3,
                         'deep_test': True, 'min_score': 60, 'test_urls': list(main.DEFAULT_TEST_URLS),
                         'request_timeout': 12.0, 'startup_timeout': 7.0,
                         'tcp_precheck': True, 'tcp_timeout': 3.0, 'interrupted': False,
@@ -213,12 +219,13 @@ class PriorityTests(unittest.TestCase):
             generated = next(p for p in report_dir.glob('*_report.json') if p.name != '20000101_000000_report.json')
             data = json.loads(generated.read_text(encoding='utf-8'))
             rows = data['metadata']['source_priority']
-            self.assertEqual(rows[0]['source'], feeds[1])
+            self.assertEqual(rows[0]['source'], source_label(feeds[1]))
             self.assertEqual((rows[0]['tested'], rows[0]['accepted']), (5, 5))
             self.assertEqual((rows[1]['tested'], rows[1]['accepted']), (5, 1))
             self.assertEqual(len(data['all_results']), 9)
             shared = next(row for row in data['all_results'] if row['address'] == 'server1.example')
-            self.assertEqual(shared['sources'], [feeds[1], feeds[0]])
+            self.assertEqual(shared['sources'],
+                             [source_label(feeds[1]), source_label(feeds[0])])
             self.assertIn('Source test priority', generated.with_suffix('.txt').read_text(encoding='utf-8-sig'))
 
 

@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from vmess_types import IDENTITY_VERSION
+
 DB_LOCK = threading.Lock()
 
 
@@ -47,9 +49,17 @@ def init_db(db_path: Path) -> None:
                     last_score INTEGER DEFAULT 0,
                     last_speed_kbps REAL DEFAULT 0,
                     last_latency REAL,
-                    last_country TEXT DEFAULT ''
+                    last_country TEXT DEFAULT '',
+                    identity_version INTEGER NOT NULL DEFAULT 1
                 )
             """)
+            # Existing v3.2 rows remain untouched, but cannot be reused as v2
+            # identities or ranked among new verified results.
+            columns = {row[1] for row in cursor.execute("PRAGMA table_info(configs)")}
+            if "identity_version" not in columns:
+                cursor.execute(
+                    "ALTER TABLE configs ADD COLUMN identity_version INTEGER NOT NULL DEFAULT 1"
+                )
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS test_records (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -99,10 +109,11 @@ def record_test_result(
                 INSERT INTO configs (
                     dedup_key, link, protocol, address, port, network, security, remark,
                     first_seen, last_seen, total_tests, success_tests, last_score,
-                    last_speed_kbps, last_latency, last_country
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
+                    last_speed_kbps, last_latency, last_country, identity_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(dedup_key) DO UPDATE SET
                     link = excluded.link,
+                    identity_version = excluded.identity_version,
                     last_seen = excluded.last_seen,
                     total_tests = total_tests + 1,
                     success_tests = success_tests + excluded.success_tests,
@@ -126,6 +137,7 @@ def record_test_result(
                 getattr(result, "speed_kbps", 0.0),
                 result.median_latency_ms,
                 getattr(result, "country", "") or "",
+                IDENTITY_VERSION,
             ))
 
             # Insert test record
@@ -173,10 +185,10 @@ def get_top_reliable_configs(db_path: Path, limit: int = 10, min_tests: int = 1)
                        ROUND((CAST(success_tests AS REAL) / total_tests) * 100, 1) as uptime,
                        last_score, last_speed_kbps, last_latency, last_country
                 FROM configs
-                WHERE total_tests >= ? AND success_tests > 0
+                WHERE total_tests >= ? AND success_tests > 0 AND identity_version = ?
                 ORDER BY uptime DESC, last_score DESC, last_speed_kbps DESC, last_latency ASC
                 LIMIT ?
-            """, (min_tests, limit))
+            """, (min_tests, IDENTITY_VERSION, limit))
             return [dict(row) for row in cur.fetchall()]
 
 

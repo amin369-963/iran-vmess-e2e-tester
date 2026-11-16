@@ -14,18 +14,23 @@ from vmess_types import ProxyConfig
 
 def source_label(source: str) -> str:
     if source.startswith("seed:"):
-        return source
-    parsed = urlparse(source)
-    # Do not copy subscription passwords, query tokens or fragments to reports.
-    host = parsed.hostname or ""
+        return "seed:[id:%s]" % hashlib.sha256(source.encode("utf-8")).hexdigest()[:12]
+    identifier = hashlib.sha256(source.encode("utf-8")).hexdigest()[:12]
+    try:
+        parsed = urlparse(source)
+        # Do not copy subscription passwords, query tokens or paths to reports.
+        host = parsed.hostname or ""
+        port = parsed.port
+    except ValueError:
+        return "[invalid-source:%s]" % identifier
     if ":" in host:
         host = "[" + host + "]"
-    if parsed.port:
-        host += ":%d" % parsed.port
-    label = "%s://%s%s" % (parsed.scheme, host, parsed.path)
-    if parsed.query or parsed.username or parsed.password:
-        label += " [id:" + hashlib.sha256(source.encode("utf-8")).hexdigest()[:8] + "]"
-    return label
+    if port:
+        host += ":%d" % port
+    # Even a URL path can embed bearer tokens or private subscriptions.
+    return "%s://%s/[id:%s]" % (
+        parsed.scheme, host, hashlib.sha256(source.encode("utf-8")).hexdigest()[:12]
+    )
 
 
 def load_recent_results(directory: Path, settings: Mapping[str, object],
@@ -81,7 +86,9 @@ def prioritize_configs(configs: Sequence[ProxyConfig], source_links: Mapping[str
         accepted = sum(row["accepted"] for row in matches)
         rate = accepted / len(matches) if len(matches) >= min_matches else None
         rows.append({
-            "source": source_label(source), "collected_links": len(links), "unique_configs": len(keys),
+            "source": source_label(source),
+            "source_id": hashlib.sha256(source.encode("utf-8")).hexdigest()[:12],
+            "collected_links": len(links), "unique_configs": len(keys),
             "history_matches": len(matches), "history_accepted": accepted,
             "history_acceptance_rate": rate,
             "minimum_history_matches": min_matches,
