@@ -161,7 +161,7 @@ def _accepted_lines(payload: dict, now: datetime, ttl_hours: int,
         "published": False,
         "redistribution_authorized": False,
         "vantage_verified": False,
-        "vantage_label": str(metadata.get("network_name", "unknown"))[:80],
+        "vantage_label_sha256": _sha256(str(metadata.get("network_name", "unknown")).encode("utf-8"))[:16],
         "run_identity_version": IDENTITY_VERSION,
         "test_started_at_utc": _iso(started),
         "test_completed_at_utc": _iso(completed),
@@ -194,11 +194,19 @@ def build_private_preview(report: Path, output_dir: Path, ttl_hours: int = 24,
 
     # Parent/output are locally owned; no public/scheduled deployment exists.
     target = output_dir.expanduser().absolute()
+    # Prevent accidental Git staging of subscription credentials in the repo.
+    repository = Path(__file__).resolve().parent
+    resolved_target = target.resolve(strict=False)
+    if resolved_target.is_relative_to(repository) and not resolved_target.is_relative_to(
+            repository / "results"):
+        raise AppError("private previews inside this repository must be under ignored results/")
     if target.exists() or target.is_symlink():
         raise AppError("preview output already exists; refusing to overwrite")
     target.parent.mkdir(parents=True, exist_ok=True)
+    created = False
     try:
         target.mkdir(mode=0o700)
+        created = True
         for name, data in ((PLAIN_NAME, plain), (BASE64_NAME, encoded)):
             path = target / name
             with os.fdopen(os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as handle:
@@ -213,7 +221,8 @@ def build_private_preview(report: Path, output_dir: Path, ttl_hours: int = 24,
             handle.flush()
             os.fsync(handle.fileno())
     except (OSError, ValueError, TypeError) as exc:
-        shutil.rmtree(str(target), ignore_errors=True)
+        if created:
+            shutil.rmtree(str(target), ignore_errors=True)
         raise AppError("failed to create private subscription preview") from exc
     return status
 
@@ -245,7 +254,11 @@ def validate_private_preview(directory: Path,
         raise AppError("preview metadata does not match private-only contract")
     completed = _utc(status.get("test_completed_at_utc"), "test_completed_at_utc")
     expiry = _utc(status.get("expires_at_utc"), "expires_at_utc")
-    if current >= expiry or completed >= expiry or completed > current + timedelta(minutes=5):
+    ttl = status.get("ttl_hours")
+    if type(ttl) is not int or not 1 <= ttl <= 72:
+        raise AppError("invalid preview TTL")
+    if (expiry != completed + timedelta(hours=ttl)
+            or current >= expiry or completed > current + timedelta(minutes=5)):
         raise AppError("preview is expired or has inconsistent timestamps")
     descriptors = status.get("files")
     if not isinstance(descriptors, dict) or set(descriptors) != {PLAIN_NAME, BASE64_NAME}:
