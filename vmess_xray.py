@@ -334,7 +334,7 @@ def _run_probes(port: int, probe_plan: Sequence[str],
                                  allow_redirects=False, stream=True) as response:
                     # Only explicit 204/empty-body responses count. In particular,
                     # 200/3xx must not validate a generate_204 test endpoint.
-                    payload = response.raw.read(4096, decode_content=True)
+                    payload = next(response.iter_content(chunk_size=4096), b"")
                     status = response.status_code
                 elapsed = (time.perf_counter() - started) * 1000.0
                 success = status == 204 and not payload
@@ -372,9 +372,11 @@ def _deep_quality_assessment(
         # 1. Cloudflare trace to find IP & Country
         try:
             with session.get("https://www.cloudflare.com/cdn-cgi/trace",
-                             timeout=min(6.0, request_timeout)) as resp:
+                             timeout=min(6.0, request_timeout),
+                             allow_redirects=False, stream=True) as resp:
                 if resp.status_code == 200:
-                    for line in resp.text.splitlines():
+                    payload = next(resp.iter_content(chunk_size=4096), b"")
+                    for line in payload.decode("utf-8", errors="replace").splitlines():
                         if line.startswith("ip="):
                             ip = line.split("=", 1)[1].strip()
                         elif line.startswith("loc="):
@@ -387,8 +389,9 @@ def _deep_quality_assessment(
             try:
                 with session.get("https://www.youtube.com/generate_204",
                                  timeout=min(6.0, request_timeout),
-                                 allow_redirects=False) as resp:
-                    if resp.status_code == 204 and not resp.content:
+                                 allow_redirects=False, stream=True) as resp:
+                    payload = next(resp.iter_content(chunk_size=4096), b"")
+                    if resp.status_code == 204 and not payload:
                         blocked_passed += 1
             except Exception:
                 pass
