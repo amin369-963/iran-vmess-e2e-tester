@@ -134,7 +134,7 @@ class FetchSafetyTests(unittest.TestCase):
 
 class IdentityVersionTests(unittest.TestCase):
     def test_connection_fields_change_identity_but_display_remark_does_not(self):
-        base = uri(1, "label") + "&ignored" if False else (
+        base = (
             "vless://00000000-0000-0000-0000-000000000001@server.example:443"
             "?encryption=none&security=tls&sni=site.example&type=ws&path=%2F"
             "&alpn=h2&fp=chrome&allowInsecure=false#one"
@@ -151,6 +151,35 @@ class IdentityVersionTests(unittest.TestCase):
         for value in variants:
             with self.subTest(uri=value):
                 self.assertNotEqual(reference.dedup_key, parse_link(value).dedup_key)
+
+    def test_legacy_sqlite_schema_is_migrated_without_data_loss(self):
+        with tempfile.TemporaryDirectory() as directory:
+            db = Path(directory) / "legacy.sqlite"
+            with sqlite3.connect(str(db)) as conn:
+                conn.execute("""
+                    CREATE TABLE configs (
+                        dedup_key TEXT PRIMARY KEY, link TEXT NOT NULL,
+                        protocol TEXT NOT NULL, address TEXT NOT NULL,
+                        port INTEGER NOT NULL, network TEXT, security TEXT,
+                        remark TEXT, first_seen TEXT NOT NULL,
+                        last_seen TEXT NOT NULL, total_tests INTEGER DEFAULT 0,
+                        success_tests INTEGER DEFAULT 0, last_score INTEGER DEFAULT 0,
+                        last_speed_kbps REAL DEFAULT 0, last_latency REAL,
+                        last_country TEXT DEFAULT ''
+                    )
+                """)
+                conn.execute("""
+                    INSERT INTO configs (dedup_key, link, protocol, address,
+                                         port, first_seen, last_seen)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, ("legacy-identity", uri(1), "vless", "server1.example",
+                      443, "2026-01-01", "2026-01-01"))
+            init_db(db)
+            with sqlite3.connect(str(db)) as conn:
+                self.assertEqual(
+                    conn.execute("SELECT identity_version FROM configs WHERE dedup_key=?",
+                                 ("legacy-identity",)).fetchone()[0], 1)
+                self.assertEqual(conn.execute("SELECT count(*) FROM configs").fetchone()[0], 1)
 
     def test_old_sqlite_records_do_not_reenter_rankings(self):
         with tempfile.TemporaryDirectory() as directory:
