@@ -1,9 +1,7 @@
 name: Controlled Pilot E2E Evaluation
 
+# Opt-in manual evaluation only: proxy probe traffic must never run on every PR.
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/pilot-e2e-eval.yml"
   workflow_dispatch:
 
 permissions:
