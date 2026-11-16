@@ -29,7 +29,7 @@ from vmess_types import (
     link_protocol, parse_link,
 )
 from vmess_xray import (
-    CREATION_FLAGS, build_balancer_xray_config, find_xray_executable, get_xray_version,
+    CREATION_FLAGS, build_balancer_xray_config, build_probe_plan, find_xray_executable, get_xray_version,
     stop_all_processes, test_config, wait_for_port,
 )
 
@@ -249,6 +249,12 @@ def main() -> int:
         raise AppError('install SOCKS support with: python -m pip install "requests[socks]"') from e_socks
 
     urls = validate_test_urls(args.test_url or DEFAULT_TEST_URLS)
+    verification_plan = build_probe_plan(urls, attempts)
+    if len(verification_plan) < 4 or len(set(verification_plan)) < 2:
+        raise AppError(
+            "E2E verification requires at least four primary HTTPS requests "
+            "across two distinct test URLs; use --attempts 3 with default URLs"
+        )
 
     sources: List[str] = []
     if not args.no_default_sources and not offline_only:
