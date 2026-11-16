@@ -198,7 +198,8 @@ def collect_links(sources: Sequence[str], seed_file: str, session: requests.Sess
     for index, source in enumerate(sources, 1):
         pilot_id = PILOT_IDS_BY_URL.get(source)
         health = {
-            "source_id": pilot_id or hashlib.sha256(source.encode("utf-8")).hexdigest()[:12],
+            "source_id": hashlib.sha256(source.encode("utf-8")).hexdigest()[:12],
+            "pilot_id": pilot_id,
             "tier": "LIGHT" if pilot_id else "EXISTING",
             "status": "pending", "bytes": 0, "raw_candidates": 0,
             "selected_candidates": 0, "fetched_at_utc": None,
