@@ -17,6 +17,8 @@ import time
 import uuid
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from vmess_types import parse_link
 from vmess_xray import STOP_EVENT, test_config
 
