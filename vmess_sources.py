@@ -7,7 +7,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Optional, Sequence, Set
+from typing import Dict, List, Optional, Sequence, Set
 from urllib.parse import urlparse
 
 import requests
@@ -130,7 +130,8 @@ def validate_source_url(url: str) -> None:
 
 def fetch_source(url: str, session: requests.Session, retries: int,
                  timeout: float, verbose: bool, logger=print,
-                 max_bytes: int = MAX_SOURCE_BYTES) -> str:
+                 max_bytes: int = MAX_SOURCE_BYTES,
+                 remaining_budget: Optional[List[int]] = None) -> str:
     """Fetch one bounded public feed; never follow redirects or log full URLs.
 
     Elapsed-time checks run between chunks; socket read timeout is NOT a
@@ -166,6 +167,11 @@ def fetch_source(url: str, session: requests.Session, retries: int,
                         if total > limit:
                             raise AppError("source exceeds allowed byte limit")
                         if chunk:
+                            if remaining_budget is not None:
+                                if len(chunk) > remaining_budget[0]:
+                                    remaining_budget[0] = 0
+                                    raise AppError("run-wide source byte budget exhausted")
+                                remaining_budget[0] -= len(chunk)
                             chunks.append(chunk)
                     return b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
         except requests.RequestException as exc:
@@ -189,7 +195,7 @@ def collect_links(sources: Sequence[str], seed_file: str, session: requests.Sess
     if len(sources) > MAX_SOURCE_COUNT or total_budget_bytes < 1:
         raise AppError("source count or cumulative download budget exceeds limit")
     links: Set[str] = set()
-    remaining = total_budget_bytes
+    remaining_budget = [total_budget_bytes]
     if seed_file:
         seeded = set(extract_links_from_subscription(read_text_file(seed_file)))
         links.update(seeded)
@@ -209,26 +215,32 @@ def collect_links(sources: Sequence[str], seed_file: str, session: requests.Sess
             source_links[source] = set()
         if source_health is not None:
             source_health[source] = health
-        if remaining < 1:
+        if remaining_budget[0] < 1:
             health["status"] = "budget_skipped"
             logger("[SOURCE %d/%d] %s: cumulative budget exhausted" %
                    (index, len(sources), source_label(source)))
             continue
         used_bytes = 0
-        per_source_cap = min(PILOT_SOURCE_BYTES if pilot_id else MAX_SOURCE_BYTES, remaining)
+        budget_before = remaining_budget[0]
+        per_source_cap = min(PILOT_SOURCE_BYTES if pilot_id else MAX_SOURCE_BYTES,
+                             remaining_budget[0])
 
         def get_text(page_url: str) -> str:
             nonlocal used_bytes
-            available = min(per_source_cap - used_bytes, remaining - used_bytes)
+            available = min(per_source_cap - used_bytes, remaining_budget[0])
             if available <= 0:
                 raise AppError("source cumulative byte budget exceeded")
+            before = remaining_budget[0]
             content = fetch_source(page_url, session, retries, timeout, verbose,
-                                   logger, available)
-            # Account conservatively for decoded characters; the HTTP stream
-            # itself is capped inside fetch_source before UTF-8 decoding.
+                                   logger, available, remaining_budget)
+            # For mocks and for any unusual decoding expansion, account
+            # conservatively without allowing negative remaining bytes.
             size = len(content.encode("utf-8"))
-            if size > available:
+            actual = before - remaining_budget[0]
+            extra = max(0, size - actual)
+            if size > available or extra > remaining_budget[0]:
                 raise AppError("source cumulative byte budget exceeded")
+            remaining_budget[0] -= extra
             used_bytes += size
             return content
 
@@ -273,6 +285,5 @@ def collect_links(sources: Sequence[str], seed_file: str, session: requests.Sess
             logger("[SOURCE %d/%d] %s failed: %s" %
                    (index, len(sources), source_label(source), health["failure_kind"]))
         finally:
-            health["bytes"] = used_bytes
-            remaining -= used_bytes
+            health["bytes"] = budget_before - remaining_budget[0]
     return links
