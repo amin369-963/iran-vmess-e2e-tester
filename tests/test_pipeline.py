@@ -203,6 +203,20 @@ class MainPipelineTests(unittest.TestCase):
             self.assertTrue(all(k['attempts'] == 3 for _, k in calls))
             self.assertTrue(all(k['deep_test'] == (flag == '--single-stage') for _, k in calls))
 
+    def test_verification_plan_fails_early_instead_of_silently_exporting_zero(self):
+        for args in (
+            ['--profile', 'fast'],
+            ['--attempts', '1'],
+            ['--test-url', 'https://www.gstatic.com/generate_204'],
+        ):
+            with self.subTest(args=args):
+                with self.assertRaisesRegex(AppError, 'at least four primary HTTPS'):
+                    self.run_main(args)
+
+    def test_fast_profile_can_verify_with_explicit_attempts(self):
+        calls, _ = self.run_main(['--profile', 'fast', '--attempts', '3'])
+        self.assertTrue(any(kwargs['attempts'] == 3 for _, kwargs in calls))
+
     def test_explicit_workers_and_conservative_profile(self):
         _, payload = self.run_main(['--profile', 'mci'])
         self.assertEqual(payload['metadata']['workers'], 3)
