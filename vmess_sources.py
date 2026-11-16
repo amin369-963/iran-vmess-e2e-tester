@@ -163,16 +163,17 @@ def fetch_source(url: str, session: requests.Session, retries: int,
                     for chunk in response.iter_content(65536):
                         if time.monotonic() >= deadline:
                             raise AppError("source elapsed-time budget exceeded")
+                        if not chunk:
+                            continue
+                        if remaining_budget is not None:
+                            if len(chunk) > remaining_budget[0]:
+                                remaining_budget[0] = 0
+                                raise AppError("run-wide source byte budget exhausted")
+                            remaining_budget[0] -= len(chunk)
                         total += len(chunk)
                         if total > limit:
                             raise AppError("source exceeds allowed byte limit")
-                        if chunk:
-                            if remaining_budget is not None:
-                                if len(chunk) > remaining_budget[0]:
-                                    remaining_budget[0] = 0
-                                    raise AppError("run-wide source byte budget exhausted")
-                                remaining_budget[0] -= len(chunk)
-                            chunks.append(chunk)
+                        chunks.append(chunk)
                     return b"".join(chunks).decode(response.encoding or "utf-8", errors="replace")
         except requests.RequestException as exc:
             if attempt == retries:
@@ -207,6 +208,8 @@ def collect_links(sources: Sequence[str], seed_file: str, session: requests.Sess
             "source_id": hashlib.sha256(source.encode("utf-8")).hexdigest()[:12],
             "pilot_id": pilot_id,
             "tier": "LIGHT" if pilot_id else "EXISTING",
+            "repo_license": PILOT_SOURCES[pilot_id]["repo_license"] if pilot_id else None,
+            "redistribution_authorized": False,
             "status": "pending", "bytes": 0, "raw_candidates": 0,
             "selected_candidates": 0, "fetched_at_utc": None,
             "failure_kind": None,
