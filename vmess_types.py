@@ -11,7 +11,8 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from urllib.parse import parse_qs, unquote, urlsplit
 
 # Single source of truth for the application version.
-APP_VERSION = "3.2.0"
+APP_VERSION = "3.3.0"
+IDENTITY_VERSION = 2
 
 SCHEME_TO_PROTOCOL: Dict[str, str] = {
     "vmess": "vmess",
@@ -71,14 +72,19 @@ class ProxyConfig:
 
     @property
     def dedup_key(self) -> str:
+        # Versioned connection identity. Display remarks must not influence it.
+        # JSON avoids delimiter collisions in passwords and transport fields.
         values = (
-            self.protocol, self.address.lower(), str(self.port), self.user_id,
-            str(self.alter_id), self.cipher, self.network, self.transport_security,
-            self.sni.lower(), self.host.lower(), self.path, self.service_name,
-            self.authority.lower(), self.password, self.method, self.flow,
-            self.encryption, self.public_key, self.short_id,
+            IDENTITY_VERSION, self.protocol, self.address.lower(), self.port,
+            self.user_id, self.alter_id, self.cipher, self.network,
+            self.transport_security, self.sni.lower(), self.host.lower(),
+            self.path, self.service_name, self.authority.lower(),
+            self.password, self.method, self.flow, self.encryption,
+            self.public_key, self.short_id, self.alpn, self.fingerprint,
+            self.allow_insecure, self.header_type, self.spider_x,
         )
-        return hashlib.sha256("|".join(values).encode("utf-8")).hexdigest()
+        encoded = json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 # Backward-compatible name used by older code and tests.
