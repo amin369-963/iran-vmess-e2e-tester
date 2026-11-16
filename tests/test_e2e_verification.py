@@ -4,6 +4,8 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import TestCase, mock
 
+import requests
+
 from vmess_types import ProbeResult, calculate_score, parse_link
 from vmess_xray import (
     MAX_SPEED_TEST_BYTES,
@@ -38,6 +40,11 @@ class DummyResponse:
         self.raw = mock.Mock()
         self.raw.read.return_value = body
         self.closed = False
+
+    def iter_content(self, chunk_size=4096):
+        payload = self.raw.read(chunk_size)
+        if payload:
+            yield payload
 
     def __enter__(self):
         return self
@@ -106,6 +113,21 @@ class VerificationGateTests(TestCase):
                 self.assertFalse(session.get.call_args.kwargs["allow_redirects"])
                 session.close.assert_called_once_with()
 
+    def test_truncated_stream_is_a_failed_probe_not_an_uncaught_exception(self):
+        response = DummyResponse(204)
+        response.iter_content = mock.Mock(
+            side_effect=requests.exceptions.ChunkedEncodingError("truncated")
+        )
+        session = mock.Mock()
+        session.proxies = {}
+        session.get.return_value = response
+        with mock.patch("vmess_xray.requests.Session", return_value=session):
+            result = _run_probes(10808, [URL_A], 2.0)
+        self.assertEqual(len(result), 1)
+        self.assertFalse(result[0].success)
+        self.assertIn("ChunkedEncodingError", result[0].error)
+        self.assertTrue(response.closed)
+
     def test_udp_mkcp_bypasses_tcp_precheck(self):
         cfg = replace(parse_link("trojan://pass@example.com:443#udp"),
                       network="mkcp")
@@ -154,7 +176,7 @@ class BoundedSpeedTests(TestCase):
                 emitted.append(1)
                 yield b"x" * 16384
 
-        trace = DummyResponse(200, text="ip=192.0.2.10\nloc=US")
+        trace = DummyResponse(200, body=b"ip=192.0.2.10\nloc=US")
         video = DummyResponse(204)
         speed = DummyResponse(200)
         speed.iter_content = mock.Mock(return_value=endless_chunks())
