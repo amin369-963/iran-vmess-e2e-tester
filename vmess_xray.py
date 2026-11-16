@@ -28,6 +28,7 @@ _RESERVED_PORTS: Set[int] = set()
 
 PORT_RETRY_LIMIT = 3
 LOG_TAIL_BYTES = 64 * 1024
+MAX_SPEED_TEST_BYTES = 512 * 1024
 PORT_IN_USE_MARKERS = (
     "address already in use",
     "only one usage of each socket address",
@@ -265,6 +266,27 @@ def build_probe_plan(urls: Sequence[str], minimum_attempts: int) -> List[str]:
 # Test execution
 # --------------------------------------------------------------------------- #
 
+def _primary_probes_verified(probes: Sequence[ProbeResult],
+                             probe_plan: Sequence[str]) -> bool:
+    """Admit only repeatable, cross-endpoint HTTPS 204 evidence.
+
+    The standard two-endpoint, three-attempt plan contains four requests.
+    Fewer than four completed probes, one-endpoint runs, or partial results
+    are useful diagnostics but cannot be labelled verified.
+    """
+    if len(probe_plan) < 4 or len(set(probe_plan)) < 2:
+        return False
+    if len(probes) != len(probe_plan):
+        return False
+    valid = [
+        probe for probe in probes
+        if probe.success and probe.status_code == 204 and probe.bytes_read == 0
+    ]
+    return (len(valid) * 4 >= len(probe_plan) * 3
+            and all(any(probe.url == url for probe in valid)
+                    for url in set(probe_plan)))
+
+
 def wait_for_port(port: int, process: subprocess.Popen, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -308,15 +330,18 @@ def _run_probes(port: int, probe_plan: Sequence[str],
                 break
             started = time.perf_counter()
             try:
-                response = session.get(url, timeout=request_timeout,
-                                       allow_redirects=False, stream=True)
-                payload = response.raw.read(4096, decode_content=True)
-                response.close()
+                with session.get(url, timeout=request_timeout,
+                                 allow_redirects=False, stream=True) as response:
+                    # Only explicit 204/empty-body responses count. In particular,
+                    # 200/3xx must not validate a generate_204 test endpoint.
+                    payload = response.raw.read(4096, decode_content=True)
+                    status = response.status_code
                 elapsed = (time.perf_counter() - started) * 1000.0
-                success = 200 <= response.status_code < 400
-                probes.append(ProbeResult(url, success, response.status_code,
-                                          elapsed, len(payload),
-                                          "" if success else "HTTP %d" % response.status_code))
+                success = status == 204 and not payload
+                error = "" if success else "expected HTTP 204 with empty body; got HTTP %d (%d bytes)" % (
+                    status, len(payload))
+                probes.append(ProbeResult(url, success, status, elapsed,
+                                          len(payload), error))
             except requests.RequestException as exc:
                 elapsed = (time.perf_counter() - started) * 1000.0
                 probes.append(ProbeResult(url, False, None, elapsed, 0,
@@ -346,22 +371,25 @@ def _deep_quality_assessment(
     try:
         # 1. Cloudflare trace to find IP & Country
         try:
-            resp = session.get("https://www.cloudflare.com/cdn-cgi/trace", timeout=min(6.0, request_timeout))
-            if resp.status_code == 200:
-                for line in resp.text.splitlines():
-                    if line.startswith("ip="):
-                        ip = line.split("=", 1)[1].strip()
-                    elif line.startswith("loc="):
-                        country = line.split("=", 1)[1].strip()
+            with session.get("https://www.cloudflare.com/cdn-cgi/trace",
+                             timeout=min(6.0, request_timeout)) as resp:
+                if resp.status_code == 200:
+                    for line in resp.text.splitlines():
+                        if line.startswith("ip="):
+                            ip = line.split("=", 1)[1].strip()
+                        elif line.startswith("loc="):
+                            country = line.split("=", 1)[1].strip()
         except Exception:
             pass
 
         # 2. Blocked site probe (YouTube)
         if test_blocked and not STOP_EVENT.is_set():
             try:
-                resp = session.get("https://www.youtube.com/generate_204", timeout=min(6.0, request_timeout), allow_redirects=False)
-                if 200 <= resp.status_code < 400:
-                    blocked_passed += 1
+                with session.get("https://www.youtube.com/generate_204",
+                                 timeout=min(6.0, request_timeout),
+                                 allow_redirects=False) as resp:
+                    if resp.status_code == 204 and not resp.content:
+                        blocked_passed += 1
             except Exception:
                 pass
 
@@ -377,7 +405,9 @@ def _deep_quality_assessment(
                             if STOP_EVENT.is_set():
                                 break
                             if chunk:
-                                total_bytes += len(chunk)
+                                total_bytes += min(len(chunk), MAX_SPEED_TEST_BYTES - total_bytes)
+                                if total_bytes >= MAX_SPEED_TEST_BYTES:
+                                    break
                 duration = time.perf_counter() - started
                 if duration > 0.05 and total_bytes > 0:
                     speed_kbps = round((total_bytes / 1024.0) / duration, 1)
@@ -446,7 +476,9 @@ def test_config(config: ProxyConfig, xray: Path, attempts: int,
                 deep_test: bool = True) -> LinkResult:
     if STOP_EVENT.is_set():
         return _failure(config, "cancelled", "run interrupted")
-    if tcp_precheck and not tcp_reachable(config.address, config.port, tcp_timeout):
+    # mKCP transports use UDP: a TCP dial cannot establish their reachability.
+    if tcp_precheck and config.network != "mkcp" and not tcp_reachable(
+            config.address, config.port, tcp_timeout):
         return _failure(config, "unreachable",
                         "TCP connect to server failed within %.1fs" % tcp_timeout)
     if STOP_EVENT.is_set():
@@ -484,14 +516,19 @@ def test_config(config: ProxyConfig, xray: Path, attempts: int,
         speed_kbps=speed_kbps,
         blocked_sites_passed=blocked_passed,
     )
-    accepted = score >= min_score and any(probe.success for probe in probes)
+    # Performance is a ranking metric, never proof of a working connection.
+    verified = _primary_probes_verified(probes, probe_plan)
+    accepted = verified and score >= min_score
     errors = [probe.error for probe in probes if probe.error]
+    failure_reason = (errors[-1] if errors else
+                      "insufficient independent HTTPS 204 evidence"
+                      if not verified else "quality score below threshold")
     if verbose and errors:
         logger("[PROBE] %s:%d %s" % (config.address, config.port, errors[-1]))
     return LinkResult(config.dedup_key, config.raw, config.address, config.port,
                       config.network, config.transport_security, config.remark,
                       score, rate, median, accepted,
-                      "" if accepted else "request", errors[-1] if errors else "", probes,
+                      "" if accepted else "request", "" if accepted else failure_reason, probes,
                       protocol=config.protocol,
                       speed_kbps=speed_kbps,
                       country=country,
