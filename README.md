@@ -108,7 +108,7 @@ python main.py ... --redact-links-in-report
 - `--no-default-sources`: test only the supplied local data.
 - `--sample`: randomly test at most N parsed configurations.
 - `--topk`: export only the best K accepted links.
-- `--test-url`: repeatable HTTPS endpoint used by the end-to-end probe.
+- `--test-url`: repeatable HTTPS endpoint that returns **HTTP 204 with an empty body** (redirects and other responses are failures).
 - `--workers`: concurrent isolated HTTPS screening tests (default profile: 8).
 - `--quality-workers`: concurrent full tests of screening survivors (default: 2).
 - `--single-stage`: use the previous testing workflow for comparison.
@@ -168,6 +168,14 @@ tested/accepted counts. Shared results contribute to every containing source's
 statistics; those source totals must not be added together. Source labels omit
 URL credentials and query strings. All sources are retained until measurements
 justify removal.
+
+## HTTPS verification policy
+
+The tester treats **real HTTPS through the isolated Xray SOCKS proxy** as admission evidence. For a configuration to be accepted, the full-stage primary probes must return exactly **HTTP 204 with an empty body**, with redirects disabled. At least **three of four** primary requests must pass, and **each of two distinct HTTPS endpoints** must pass at least once. The `--min-score` threshold ranks candidates only **after** this evidence gate; optional speed, YouTube or latency points cannot compensate for failed primary requests.
+
+With the default two test URLs, use `--attempts 3` or higher to get at least four requests. Lower attempt counts, or only one distinct test URL, remain useful as diagnostics/screening but **cannot produce accepted links**. `--profile fast` defaults to one attempt and therefore requires an explicit `--attempts 3` when accepted exports are wanted. Custom `--test-url` endpoints must also return HTTP 204 with no response body.
+
+The TCP precheck is not used for UDP-based mKCP transports. Optional quality downloads stop reading after **512 KiB**; this is a byte cap, not a hard wall-time guarantee. A reported success is valid only for the testing machine/network and observation time, **not** proof of availability on Iranian ISPs.
 
 ## Two-stage testing
 
