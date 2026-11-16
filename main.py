@@ -23,9 +23,12 @@ from vmess_reports import (
     calculate_input_set_sha256, create_run_paths, generate_run_timestamp,
     sanitize_network_name, write_accepted_links, write_outputs,
 )
-from vmess_sources import DEFAULT_SOURCES, PROFILES, build_source_session, collect_links, read_text_file
+from vmess_sources import (
+    DEFAULT_SOURCES, MAX_TOTAL_SOURCE_BYTES, PILOT_SOURCES, PROFILES,
+    build_source_session, collect_links, read_text_file,
+)
 from vmess_types import (
-    APP_VERSION, SUPPORTED_PROTOCOLS, AppError, LinkResult, ProxyConfig, clean_text,
+    APP_VERSION, IDENTITY_VERSION, SUPPORTED_PROTOCOLS, AppError, LinkResult, ProxyConfig, clean_text,
     link_protocol, parse_link,
 )
 from vmess_xray import (
@@ -80,12 +83,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sources-file", default="")
     parser.add_argument("--source-url", action="append", default=[])
     parser.add_argument("--no-default-sources", action="store_true")
+    parser.add_argument("--pilot-source", action="append", default=[],
+                        choices=sorted(PILOT_SOURCES),
+                        help="Opt-in bounded experimental feed; repeat for multiple feeds")
+    parser.add_argument("--source-budget-mib", type=int, default=64,
+                        help="Maximum cumulative successful remote feed payload, MiB (1..64)")
     parser.add_argument("--source-proxy", default="")
     parser.add_argument("--telegram-limit", type=int, default=50,
                         help="Maximum unique supported configurations per Telegram channel (1..500)")
     parser.add_argument("--telegram-hours", type=int, default=24,
                         help="Only read Telegram posts from the last N hours (1..168)")
     parser.add_argument("--sample", type=int, default=0)
+    parser.add_argument("--sample-seed", type=int, default=None,
+                        help="Reproducible sample selection for source comparisons")
     parser.add_argument("--topk", type=int, default=0, help="Export only top K accepted configurations")
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--quality-workers", type=int, default=2,
@@ -241,6 +251,8 @@ def main() -> int:
         raise AppError("min-score must be between 0 and 100")
     if args.sample < 0 or args.topk < 0:
         raise AppError("sample and topk cannot be negative")
+    if not 1 <= args.source_budget_mib <= MAX_TOTAL_SOURCE_BYTES // (1024 * 1024):
+        raise AppError("source-budget-mib must be 1..64")
     if not 1 <= args.telegram_limit <= 500 or not 1 <= args.telegram_hours <= 168:
         raise AppError("telegram-limit must be 1..500 and telegram-hours must be 1..168")
     try:
@@ -265,6 +277,9 @@ def main() -> int:
             if line and not line.startswith("#"):
                 sources.append(line)
     sources.extend(src.strip() for src in args.source_url if src.strip())
+    if args.pilot_source and offline_only:
+        raise AppError("pilot sources are unavailable in offline-only profile")
+    sources.extend(PILOT_SOURCES[name]["url"] for name in args.pilot_source)
     sources = list(dict.fromkeys(sources))
     if offline_only:
         sources.clear()
@@ -273,11 +288,14 @@ def main() -> int:
 
     session = build_source_session(args.source_proxy)
     source_links: Dict[str, Set[str]] = {}
+    source_health: Dict[str, dict] = {}
     try:
         collected = collect_links(sources, args.seed_file, session,
                                   retries, args.source_timeout, args.verbose, log,
                                   source_links=source_links, telegram_limit=args.telegram_limit,
-                                  telegram_hours=args.telegram_hours, protocols=set(protocols))
+                                  telegram_hours=args.telegram_hours, protocols=set(protocols),
+                                  source_health=source_health,
+                                  total_budget_bytes=args.source_budget_mib * 1024 * 1024)
     finally:
         session.close()
     raw_links = {link for link in collected if link_protocol(link) in protocols}
@@ -300,10 +318,13 @@ def main() -> int:
             ))
     configs = list(parsed.values())
     if args.sample and len(configs) > args.sample:
-        random.SystemRandom().shuffle(configs)
+        selector = random.Random(args.sample_seed) if args.sample_seed is not None else random.SystemRandom()
+        selector.shuffle(configs)
         configs = configs[:args.sample]
+    selection_hash = calculate_input_set_sha256(config.raw for config in configs)
 
     history_settings = {
+        "identity_version": IDENTITY_VERSION,
         "network_name": network_name, "profile": args.profile, "attempts": attempts,
         "deep_test": not args.no_deep_test, "min_score": min_score, "test_urls": urls,
         "request_timeout": request_timeout, "startup_timeout": startup_timeout,
@@ -312,6 +333,12 @@ def main() -> int:
     }
     history, history_report = load_recent_results(run_paths.output_dir, history_settings, log)
     configs, source_priority, config_sources = prioritize_configs(configs, source_links, link_keys, history)
+    health_by_id = {entry["source_id"]: entry for entry in source_health.values()}
+    for row in source_priority:
+        status = health_by_id.get(row["source_id"])
+        row["fetch"] = status or {"status": "local_seed", "source_id": row["source_id"]}
+        row["accepted_exclusive"] = 0
+        row["pilot_incremental_accepted"] = None
     log("[SOURCE PRIORITY] History=%s; successful sources, unknown sources, failed-only sources; fewer configs break ties" %
         (history_report or "none"))
     for index, row in enumerate(source_priority, 1):
@@ -382,6 +409,26 @@ def main() -> int:
     accepted_exported = accepted_all[:args.topk] if args.topk else accepted_all
     for row in source_priority:
         row["acceptance_rate"] = row["accepted"] / row["tested"] if row["tested"] else None
+    # Shared accepted nodes count once globally; leave-one-source-out gains
+    # are credited only when no second source provides the same identity.
+    accepted_keys = {result.key for result in accepted_all}
+    baseline_indices = {
+        i for i, row in enumerate(source_priority)
+        if row["fetch"].get("pilot_id") is None
+        and row["fetch"].get("status") in ("ok", "capped", "local_seed")
+    }
+    baseline_exists = bool(baseline_indices)
+    for row in source_priority:
+        if row["fetch"].get("pilot_id") and baseline_exists:
+            row["pilot_incremental_accepted"] = 0
+    for key in accepted_keys:
+        indices = config_sources.get(key, [])
+        if len(indices) == 1:
+            source_priority[indices[0]]["accepted_exclusive"] += 1
+        if baseline_exists and not baseline_indices.intersection(indices):
+            for i in indices:
+                if source_priority[i]["fetch"].get("pilot_id"):
+                    source_priority[i]["pilot_incremental_accepted"] += 1
     complete = sorted(parse_failures + results,
                       key=lambda res_item: (not res_item.accepted, -res_item.score, res_item.address, res_item.port))
     if args.seed_file and sources:
@@ -392,6 +439,7 @@ def main() -> int:
         source_mode = "remote-sources"
     metadata: Dict[str, object] = {
         "app_version": APP_VERSION,
+        "identity_version": IDENTITY_VERSION,
         "run_timestamp": timestamp,
         "generated_at_local": started_local.strftime("%Y-%m-%d %H:%M:%S %z"),
         "generated_at_utc": started_utc.isoformat(),
@@ -413,6 +461,10 @@ def main() -> int:
         "source_mode": source_mode,
         "source_history_report": history_report or None,
         "source_priority": source_priority,
+        "pilot_sources_requested": list(dict.fromkeys(args.pilot_source)),
+        "source_budget_mib": args.source_budget_mib,
+        "selection_set_sha256": selection_hash,
+        "sample_seed": args.sample_seed,
         "telegram_limit": args.telegram_limit, "telegram_hours": args.telegram_hours,
         "allow_insecure_server_cert": args.allow_insecure_server_cert,
         "seed_file": Path(args.seed_file).name if args.seed_file else "-",
