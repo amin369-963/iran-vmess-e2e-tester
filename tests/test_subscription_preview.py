@@ -199,6 +199,21 @@ class PrivatePreviewTests(unittest.TestCase):
         with self.assertRaisesRegex(AppError, "sufficient HTTPS"):
             self.generate()
 
+    def test_preview_expiry_cannot_be_extended_by_editing_manifest_ttl(self):
+        manifest = self.generate()
+        manifest["expires_at_utc"] = (
+            NOW + timedelta(days=10)).isoformat()
+        (self.output / STATUS_NAME).write_text(json.dumps(manifest), encoding="utf-8")
+        with self.assertRaisesRegex(AppError, "inconsistent timestamps"):
+            validate_private_preview(self.output, now=NOW)
+
+    def test_cannot_write_credential_files_into_tracked_repository_tree(self):
+        target = Path(__file__).resolve().parents[1] / "unsafe_subscription_preview"
+        self.assertFalse(target.exists())
+        with self.assertRaisesRegex(AppError, "ignored results"):
+            build_private_preview(self.report, target, now=NOW)
+        self.assertFalse(target.exists())
+
     def test_existing_directory_is_never_overwritten(self):
         self.output.mkdir(parents=True)
         marker = self.output / "important.txt"
